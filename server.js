@@ -169,7 +169,6 @@ function setupBotLogic() {
         bot.sendMessage(ADMIN_ID, `✅ Đã gửi thông báo thành công đến ${count} người dùng.`);
     });
 
-    // Lệnh gửi thông báo code nhanh cho Admin: /sendcode <Nội dung code>
     bot.onText(/\/sendcode (.+)/, (msg, match) => {
         if (msg.chat.id.toString() !== ADMIN_ID) return;
         const codeContent = match[1];
@@ -268,6 +267,7 @@ function setupBotLogic() {
             });
         }
 
+        // Admin: Xem chi tiết User
         if (data.startsWith('admin_view_user_') && isAdmin) {
             const targetId = data.replace('admin_view_user_', '');
             const targetUser = users[targetId];
@@ -283,6 +283,9 @@ function setupBotLogic() {
                 reply_markup: {
                     inline_keyboard: [
                         [
+                            { text: '🎯 Săn Lệnh / Xem Tài Khoản', callback_data: `admin_sanlenh_${targetId}` } // NÚT SĂN LỆNH MỚI
+                        ],
+                        [
                             { text: '➕ Cộng 50k', callback_data: `admin_add_50000_${targetId}` },
                             { text: '➕ Cộng 500k', callback_data: `admin_add_500000_${targetId}` }
                         ],
@@ -295,6 +298,44 @@ function setupBotLogic() {
                             { text: '🗑️ Xóa User', callback_data: `admin_delete_${targetId}` }
                         ],
                         [{ text: '◀ Danh sách User', callback_data: 'admin_list_users' }]
+                    ]
+                }
+            });
+        }
+
+        // Admin: Tính năng SĂN LỆNH / THEO DÕI
+        if (data.startsWith('admin_sanlenh_') && isAdmin) {
+            const targetId = data.replace('admin_sanlenh_', '');
+            const targetUser = users[targetId];
+            if (!targetUser) return bot.answerCallbackQuery(query.id, { text: '❌ Không tìm thấy user này!' });
+
+            let sanLenhMsg = `🎯 *SĂN LỆNH & CHI TIẾT TÀI KHOẢN*\n\n`;
+            sanLenhMsg += `👤 Khách hàng: *${targetUser.name}* (ID: \`${targetId}\`)\n`;
+            sanLenhMsg += `------------------------------------\n`;
+            sanLenhMsg += `📋 *KHO TÀI KHOẢN GAME LIÊN KẾT:*\n`;
+            
+            let totalLinks = 0;
+            if (targetUser.linkedAccounts) {
+                Object.keys(targetUser.linkedAccounts).forEach(brand => {
+                    const accounts = targetUser.linkedAccounts[brand];
+                    if (accounts && accounts.length > 0) {
+                        sanLenhMsg += `• *${brand}*: \`${accounts.join('`, `')}\`\n`;
+                        totalLinks += accounts.length;
+                    }
+                });
+            }
+            
+            if (totalLinks === 0) {
+                sanLenhMsg += `⚠️ _User này chưa liên kết bất kỳ tài khoản nhà cái nào._\n`;
+            } else {
+                sanLenhMsg += `\n📊 Tổng cộng: *${totalLinks}* tài khoản.\n`;
+            }
+
+            return bot.sendMessage(chatId, sanLenhMsg, {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '◀ Quay lại User', callback_data: `admin_view_user_${targetId}` }]
                     ]
                 }
             });
