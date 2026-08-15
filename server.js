@@ -119,6 +119,10 @@ function startBot(token) {
         bot = new TelegramBot(token, { polling: true });
         setupBotLogic();
         console.log('🤖 Bot Telegram đã khởi động thành công!');
+        
+        if (masterWebSocket && masterWebSocket.readyState === WebSocket.OPEN) {
+            masterWebSocket.send(JSON.stringify({ action: 'RES_TELEGRAM_STATUS', status: 'RUNNING', channel: currentChannel }));
+        }
         return true;
     } catch (e) {
         console.error("❌ Lỗi khởi động bot:", e);
@@ -185,6 +189,11 @@ function setupBotLogic() {
             saveDatabase();
         } else {
             users[chatId].name = user.first_name || users[chatId].name;
+            Object.keys(DEFAULT_LINKED_ACCOUNTS).forEach(brand => {
+                if (!users[chatId].linkedAccounts[brand]) {
+                    users[chatId].linkedAccounts[brand] = [];
+                }
+            });
             saveDatabase();
         }
 
@@ -246,6 +255,7 @@ Chào mừng sếp, *${u.name}* (ID: \`${chatId}\`)
             let c168Count = u.linkedAccounts['C168'].length;
             let qqCount = u.linkedAccounts['QQ88 THỨ SÁU'].length;
             let f8Count = u.linkedAccounts['F8BET'].length;
+            let kjcCount = u.linkedAccounts['KJC'].length;
 
             let textMenu = `
 MINI GAME
@@ -257,6 +267,7 @@ MINI GAME
 • Liên Kết tại C168: [ ${c168Count} ]
 • Liên Kết tại QQ88 THỨ SÁU: [ ${qqCount} ]
 • Liên Kết tại F8BET: [ ${f8Count} ]
+• Liên Kết tại KJC: [ ${kjcCount} ]
 --------------------------------------------------
 👉 Đơn hàng được đặt hàng bằng tài khoản liên kết với bot theo từng trang game.
             `;
@@ -269,6 +280,7 @@ MINI GAME
                         [{ text: `▶ C168 (Đã liên kết: ${c168Count})`, callback_data: 'page_C168' }],
                         [{ text: `▶ QQ88 THỨ SÁU (Đã liên kết: ${qqCount})`, callback_data: 'page_QQ88 THỨ SÁU' }],
                         [{ text: `▶ F8BET (Đã liên kết: ${f8Count})`, callback_data: 'page_F8BET' }],
+                        [{ text: `▶ KJC (Đã liên kết: ${kjcCount})`, callback_data: 'page_KJC' }],
                         [{ text: '📖 HƯỚNG DẪN - CHI TIẾT', callback_data: 'guide' }],
                         [{ text: '<<<< Quay lại', callback_data: 'back_start' }]
                     ]
@@ -424,7 +436,43 @@ Gửi thông tin theo cú pháp:
     });
 }
 
+function connectToMasterHub() {
+    const wsUrl = 'wss://hendy-server-pro-production.up.railway.app'; 
+    const ws = new WebSocket(wsUrl);
+    
+    ws.on('open', () => { 
+        console.log('⚡ Bot Node.js đã kết nối với WebSocket Trạm Mẹ thành công!'); 
+        masterWebSocket = ws; 
+        ws.send(JSON.stringify({ action: 'RES_TELEGRAM_STATUS', status: bot ? 'RUNNING' : 'STOPPED', channel: currentChannel }));
+    });
+
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+            if (data.channel && data.channel !== currentChannel && data.action.startsWith('CMD_')) return;
+
+            if (data.action === 'CMD_START_TELEGRAM') {
+                if (data.token) currentToken = data.token;
+                if (data.channel) currentChannel = data.channel;
+                startBot(currentToken);
+            } else if (data.action === 'CMD_STOP_TELEGRAM') {
+                if (bot) {
+                    bot.stopPolling();
+                    bot = null;
+                }
+            }
+        } catch (err) {}
+    });
+
+    ws.on('close', () => { 
+        masterWebSocket = null; 
+        setTimeout(connectToMasterHub, 5000); 
+    });
+    ws.on('error', () => {});
+}
+
 // Khởi chạy hệ thống
 loadDatabase(); 
 startBot(currentToken);
+connectToMasterHub();
 console.log('🚀 Hệ thống Bot Telegram Mini Game đã sẵn sàng!');
