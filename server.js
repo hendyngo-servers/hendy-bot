@@ -5,43 +5,38 @@ const fs = require('fs');
 const path = require('path');
 
 // ==========================================
-// ⚙️ CẤU HÌNH MẶC ĐỊNH & HỆ THỐNG
+// ⚙️ CẤU HÌNH HỆ THỐNG
 // ==========================================
 const WS_PORT = process.env.PORT || 8080;
 let currentToken = process.env.BOT_TOKEN || '8689114890:AAFBFM0rNtZWpOtAovIPHPVQTJVp0odU1DQ'; 
-let currentAdminId = ''; 
 let currentChannel = 'KENH-1'; 
 let bot = null;
 
-// Cấu hình ID của Admin
 const ADMIN_ID = '6138197737'; 
-
-// Cấu hình Database
 const DB_FILE = path.join(__dirname, 'database.json');
 let users = {};
 const userStates = {};
 const userCooldowns = {}; 
 let masterWebSocket = null;
+let isMaintenanceMode = false; // Trạng thái bảo trì hệ thống
 
-// Khung cấu trúc tài khoản mặc định (Bổ sung QQ88 và 78WIN)
+// Khớp chuẩn các brand theo giao diện thực tế
 const DEFAULT_LINKED_ACCOUNTS = { 
     SC88: [], 
     C168: [], 
-    CM88: [], 
+    'QQ88 THỨ SÁU': [], 
     F8BET: [], 
-    QQ88: [], 
-    '78WIN': [] 
+    KJC: [] 
 };
 
 // ==========================================
-// 🗄️ HÀM LƯU & ĐỌC DATABASE (CÓ TỰ ĐỘNG BACKUP)
+// 🗄️ QUẢN LÝ DATABASE
 // ==========================================
 function loadDatabase() {
     try {
         if (fs.existsSync(DB_FILE)) {
             const data = fs.readFileSync(DB_FILE, 'utf8');
             users = JSON.parse(data);
-            // Đảm bảo user cũ cũng có đủ các brand mới
             Object.keys(users).forEach(uid => {
                 if (!users[uid].linkedAccounts) {
                     users[uid].linkedAccounts = JSON.parse(JSON.stringify(DEFAULT_LINKED_ACCOUNTS));
@@ -53,13 +48,13 @@ function loadDatabase() {
                     });
                 }
             });
-            console.log(`✅ Đã tải dữ liệu của ${Object.keys(users).length} khách hàng từ database.json`);
+            console.log(`✅ Đã tải dữ liệu của ${Object.keys(users).length} khách hàng.`);
         } else {
-            console.log('⚠️ Không tìm thấy database.json, sẽ tạo mới file khi có dữ liệu.');
+            console.log('⚠️ Chưa có file database.json, hệ thống sẽ tự khởi tạo.');
             users = {};
         }
     } catch (err) {
-        console.error('❌ Lỗi khi đọc file database.json:', err);
+        console.error('❌ Lỗi đọc database:', err);
         users = {}; 
     }
 }
@@ -72,13 +67,10 @@ function saveDatabase() {
         }
         fs.writeFileSync(DB_FILE, JSON.stringify(users, null, 4), 'utf8');
     } catch (err) {
-        console.error('❌ Lỗi khi lưu file database.json:', err);
+        console.error('❌ Lỗi lưu database:', err);
     }
 }
 
-// ==========================================
-// 1. HÀM GỬI LOG VỀ GIAO DIỆN TRẠM MẸ (WEB)
-// ==========================================
 function sendLogToWeb(msg) {
     if (masterWebSocket && masterWebSocket.readyState === WebSocket.OPEN) {
         masterWebSocket.send(JSON.stringify({
@@ -91,7 +83,31 @@ function sendLogToWeb(msg) {
 }
 
 // ==========================================
-// 2. HÀM KHỞI ĐỘNG VÀ CÀI ĐẶT LOGIC BOT
+// 🏆 HÀM THÔNG BÁO TRÚNG THƯỞNG
+// ==========================================
+function notifyUserWon(chatId, brand, accountName, points) {
+    if (!users[chatId]) return;
+    
+    if (!users[chatId].wonCodes) {
+        users[chatId].wonCodes = [];
+    }
+    users[chatId].wonCodes.push({ brand, accountName, points, time: new Date().toISOString() });
+    saveDatabase();
+
+    const winMessage = `
+🌐 *THÔNG TIN CHI TIẾT ĐÃ TRÚNG:*
+
+⭐ *Tài khoản đã trúng:* \`${accountName}\`
+
+${brand} | ${points}
+💎 *Điểm trúng:* \`${points}\`
+    `;
+
+    bot.sendMessage(chatId, winMessage, { parse_mode: 'Markdown' });
+}
+
+// ==========================================
+// 🤖 KHỞI TẠO BOT TELEGRAM
 // ==========================================
 function startBot(token) {
     if (bot) {
@@ -103,10 +119,6 @@ function startBot(token) {
         bot = new TelegramBot(token, { polling: true });
         setupBotLogic();
         console.log('🤖 Bot Telegram đã khởi động thành công!');
-        
-        if (masterWebSocket && masterWebSocket.readyState === WebSocket.OPEN) {
-            masterWebSocket.send(JSON.stringify({ action: 'RES_TELEGRAM_STATUS', status: 'RUNNING', channel: currentChannel }));
-        }
         return true;
     } catch (e) {
         console.error("❌ Lỗi khởi động bot:", e);
@@ -117,12 +129,52 @@ function startBot(token) {
 function setupBotLogic() {
     if (!bot) return;
 
-    // LỆNH /START
+    // Bộ lọc kiểm tra bảo trì
+    const checkMaintenance = (chatId) => {
+        if (isMaintenanceMode && chatId.toString() !== ADMIN_ID) {
+            bot.sendMessage(chatId, '🛠️ *HỆ THỐNG ĐANG BẢO TRÌ*\nBot đang trong quá trình nâng cấp hệ thống. Vui lòng quay lại sau sếp nhé!', { parse_mode: 'Markdown' });
+            return true;
+        }
+        return false;
+    };
+
+    // LỆNH BẬT/TẮT BẢO TRÌ DÀNH CHO ADMIN
+    bot.onText(/\/baotri(?: (.+))?/, (msg, match) => {
+        const chatId = msg.chat.id;
+        if (chatId.toString() !== ADMIN_ID) {
+            bot.sendMessage(chatId, '⛔ Bạn không có quyền thực hiện lệnh này!');
+            return;
+        }
+
+        const action = match[1] ? match[1].trim().toLowerCase() : '';
+
+        if (action === 'on') {
+            isMaintenanceMode = true;
+            bot.sendMessage(chatId, '🛠️ *Đã BẬT chế độ bảo trì hệ thống!*', { parse_mode: 'Markdown' });
+            sendLogToWeb('⚠️ Admin đã BẬT chế độ bảo trì hệ thống.');
+        } else if (action === 'off') {
+            isMaintenanceMode = false;
+            bot.sendMessage(chatId, '✅ *Đã TẮT chế độ bảo trì!* Hệ thống hoạt động bình thường.', { parse_mode: 'Markdown' });
+            sendLogToWeb('✅ Admin đã TẮT chế độ bảo trì hệ thống.');
+        } else {
+            bot.sendMessage(chatId, `
+⚙️ *TRẠNG THÁI BẢO TRÌ:* \`${isMaintenanceMode ? 'ĐANG BẢO TRÌ 🔴' : 'ĐANG HOẠT ĐỘNG 🟢'}\`
+--------------------------------------------------
+• \`/baotri on\` - Bật chế độ bảo trì
+• \`/baotri off\` - Tắt chế độ bảo trì
+            `, { parse_mode: 'Markdown' });
+        }
+    });
+
+    // LỆNH /START (TỰ ĐỘNG HIỆN MENU ADMIN NẾU ĐÚNG ID)
     bot.onText(/\/start/, (msg) => {
         const chatId = msg.chat.id;
+        if (checkMaintenance(chatId)) return;
+        
         const user = msg.from;
+        const isAdmin = (chatId.toString() === ADMIN_ID);
 
-        sendLogToWeb(`👤 Khách [${user.first_name}] (ID: ${chatId}) vừa mở Bot.`);
+        sendLogToWeb(`👤 Khách [${user.first_name}] (ID: ${chatId}) mở Bot.`);
 
         if (!users[chatId]) {
             users[chatId] = {
@@ -133,610 +185,246 @@ function setupBotLogic() {
             saveDatabase();
         } else {
             users[chatId].name = user.first_name || users[chatId].name;
-            // Đảm bảo đủ các trường liên kết mới
-            Object.keys(DEFAULT_LINKED_ACCOUNTS).forEach(brand => {
-                if (!users[chatId].linkedAccounts[brand]) {
-                    users[chatId].linkedAccounts[brand] = [];
-                }
-            });
             saveDatabase();
         }
 
         const u = users[chatId];
         const welcomeMessage = `
-🤖 *BOT HENDY CYBERTECH 2026* [BOT CHÍNH] 🚀
-Buổi chiều vui vẻ nhé, *${u.name}* (ID: \`${chatId}\`)
+🤖 *HENDY CYBERTECH PRO v2026* 🚀
+Chào mừng sếp, *${u.name}* (ID: \`${chatId}\`)
 --------------------------------------------------
-💎 *VIP 0*
-
+💎 *Cấp độ:* ${isAdmin ? '👑 ADMIN TỐI CAO' : 'VIP 0'}
 💰 **Ví Chính:** \`${u.balance.toLocaleString()} VNĐ\`
 🎁 **Ví Voucher:** \`${u.voucher.toLocaleString()} VNĐ\`
 --------------------------------------------------
-👉 Trang Chủ Website: https://hendy-cybertech.com
+👉 Hệ thống tự động bảo mật & đồng bộ cao cấp.
         `;
+
+        let inlineKeyboard = [
+            [{ text: '🎟️ TRUNG TÂM MUA CODE & MINI GAME', callback_data: 'buy_code' }],
+            [{ text: '💳 NẠP TIỀN TỰ ĐỘNG', callback_data: 'deposit' }],
+            [{ text: '📇 TRUNG TÂM KHÁCH HÀNG (WEB)', callback_data: 'customer_center' }],
+            [{ text: '👥 NHÓM HỖ TRỢ', url: 'https://t.me/Hendy_Support_Group' }]
+        ];
+
+        if (isAdmin) {
+            inlineKeyboard.unshift(
+                [{ text: '🛠️ [ADMIN] THỐNG KÊ MÁY CHỦ & RAM', callback_data: 'admin_server_status' }],
+                [{ text: '👥 [ADMIN] DANH SÁCH USER HỆ THỐNG', callback_data: 'admin_list_users' }]
+            );
+        }
 
         bot.sendMessage(chatId, welcomeMessage, {
             parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '🎟️ TRUNG TÂM MUA CODE', callback_data: 'buy_code' }],
-                    [{ text: '💳 NẠP TIỀN', callback_data: 'deposit' }],
-                    [{ text: '📇 TRUNG TÂM KHÁCH HÀNG', callback_data: 'customer_center' }],
-                    [{ text: '👥 NHÓM GIAO LƯU', url: 'https://t.me/Hendy_Support_Group' }]
-                ]
-            }
+            reply_markup: { inline_keyboard: inlineKeyboard }
         });
     });
 
-    // ==========================================
-    // 🛡️ HỆ THỐNG LỆNH ADMIN TỐI ƯU GỌN GÀNG
-    // ==========================================
-    bot.onText(/\/admin/, (msg) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) {
-            bot.sendMessage(chatId, '⛔ Sếp không có quyền sử dụng bảng điều khiển này!');
-            return;
-        }
-
-        const adminMenuText = `
-🛠️ *BẢNG QUẢN TRỊ HỆ THỐNG (ADMIN PANEL)*
---------------------------------------------------
-• \`/status\` - Kiểm tra trạng thái hệ thống
-• \`/user [ID]\` - Xem thông tin chi tiết khách hàng
-• \`/addmoney [ID] [Số tiền]\` - Cộng/trừ tiền ví chính
-• \`/trungcode [ID] [Trang] [TàiKhoản] [MãCode]\` - Cấp code cho khách
-• \`/broadcast [Nội dung]\` - Phát loa toàn hệ thống
-        `;
-
-        bot.sendMessage(chatId, adminMenuText, { parse_mode: 'Markdown' });
-    });
-
-    bot.onText(/\/status/, (msg) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) return;
-
-        const totalUsers = Object.keys(users).length;
-        const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024;
-
-        const statusText = `
-⚙️ *TRẠNG THÁI HỆ THỐNG BOT*
---------------------------------------------------
-👥 Tổng số khách hàng: \`${totalUsers}\`
-🧠 RAM đang sử dụng: \`${memoryUsage.toFixed(2)} MB\`
-⚡ Trạng thái WebSocket: \`${masterWebSocket && masterWebSocket.readyState === WebSocket.OPEN ? 'ĐÃ KẾT NỐI' : 'MẤT KẾT NỐI'}\`
-🕒 Thời gian hoạt động: \`${(process.uptime() / 60).toFixed(1)} phút\`
-        `;
-        bot.sendMessage(chatId, statusText, { parse_mode: 'Markdown' });
-    });
-
-    bot.onText(/\/broadcast (.+)/, (msg, match) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) return;
-
-        const broadcastMessage = match[1];
-        let successCount = 0;
-
-        Object.keys(users).forEach(uid => {
-            bot.sendMessage(uid, `📢 *THÔNG BÁO TỪ HỆ THỐNG:*\n\n${broadcastMessage}`, { parse_mode: 'Markdown' })
-               .catch(() => {});
-            successCount++;
-        });
-
-        bot.sendMessage(chatId, `✅ Đã phát loa thành công tới \`${successCount}\` khách hàng!`);
-    });
-
-    bot.onText(/\/user (\d+)/, (msg, match) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) return;
-
-        const targetId = match[1];
-        const uInfo = users[targetId];
-
-        if (!uInfo) {
-            bot.sendMessage(chatId, `❌ Không tìm thấy thông tin của user ID: \`${targetId}\``, { parse_mode: 'Markdown' });
-            return;
-        }
-
-        let linkSummary = '';
-        Object.keys(uInfo.linkedAccounts || {}).forEach(brand => {
-            const accs = uInfo.linkedAccounts[brand];
-            if (accs.length > 0) {
-                linkSummary += `\n• *${brand}* (${accs.length}): `;
-                accs.forEach(a => linkSummary += `\`${a.tk}\` `);
-            }
-        });
-
-        const userInfoText = `
-👤 *THÔNG TIN KHÁCH HÀNG*
---------------------------------------------------
-🆔 ID: \`${targetId}\`
-🏷️ Tên: \`${uInfo.name}\`
-💰 Ví chính: \`${uInfo.balance.toLocaleString()} VNĐ\`
-🎁 Voucher: \`${uInfo.voucher.toLocaleString()} VNĐ\`
-🏆 Số code đã trúng: \`${(uInfo.wonCodes || []).length}\`
-🔗 Tài khoản liên kết:${linkSummary || '\nChưa có liên kết nào'}
-        `;
-        bot.sendMessage(chatId, userInfoText, { parse_mode: 'Markdown' });
-    });
-
-    bot.onText(/\/addmoney (\d+) (-?\d+)/, (msg, match) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) return;
-
-        const targetId = match[1];
-        const amount = parseInt(match[2]);
-
-        if (!users[targetId]) {
-            bot.sendMessage(chatId, `❌ Không tìm thấy user ID: \`${targetId}\``, { parse_mode: 'Markdown' });
-            return;
-        }
-
-        users[targetId].balance += amount;
-        saveDatabase();
-
-        bot.sendMessage(chatId, `✅ Đã cập nhật ví cho user \`${targetId}\`. Số dư mới: \`${users[targetId].balance.toLocaleString()} VNĐ\``, { parse_mode: 'Markdown' });
-        
-        bot.sendMessage(targetId, `💰 *BIẾN ĐỘNG SỐ DƯ*\n\nTài khoản của sếp vừa được điều chỉnh: \`${amount > 0 ? '+' : ''}${amount.toLocaleString()} VNĐ\`\n💎 Số dư hiện tại: \`${users[targetId].balance.toLocaleString()} VNĐ\``, { parse_mode: 'Markdown' })
-            .catch(() => {});
-    });
-
-    // LỆNH TRÚNG CODE
-    bot.onText(/\/trungcode (\d+) (\S+) (\S+) (\S+)/, (msg, match) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) return;
-
-        const targetId = match[1];
-        const brand = match[2].toUpperCase();
-        const accountTk = match[3];
-        const wonCode = match[4];
-
-        if (!users[targetId]) {
-            bot.sendMessage(chatId, `❌ Không tìm thấy user ID: \`${targetId}\``, { parse_mode: 'Markdown' });
-            return;
-        }
-
-        const now = new Date();
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        const seconds = String(now.getSeconds()).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const year = now.getFullYear();
-
-        const formattedTime = `${hours}:${minutes}:${seconds} ngày ${day}/${month}/${year}`;
-
-        if (!users[targetId].wonCodes) {
-            users[targetId].wonCodes = [];
-        }
-        
-        users[targetId].wonCodes.push({ 
-            brand, 
-            accountTk, 
-            code: wonCode, 
-            time: formattedTime 
-        });
-        saveDatabase();
-
-        const congratText = `
-🎉 *CHÚNG MỪNG SẾP ĐÃ TRÚNG CODE!* 🏆
---------------------------------------------------
-🎯 **Trang Game:** \`${brand}\`
-👤 **Tài Khoản:** \`${accountTk}\`
-🎁 **Mã Code Nhận Thưởng:** \`🎉 ${wonCode} 🎉\`
-🕒 **Thời Gian Trúng:** \`${formattedTime}\`
---------------------------------------------------
-💡 *Mã code và thời gian đã được lưu vào hệ thống Trung Tâm Khách Hàng của sếp!*
-        `;
-
-        bot.sendMessage(targetId, congratText, { parse_mode: 'Markdown' })
-            .then(() => {
-                bot.sendMessage(chatId, `✅ Đã cấp code \`${wonCode}\` vào database lúc [${formattedTime}] cho khách \`${targetId}\` thành công!`);
-            })
-            .catch((err) => {
-                bot.sendMessage(chatId, `⚠️ Đã lưu code vào database kèm thời gian nhưng không gửi được tin nhắn cho khách: ${err.message}`);
-            });
-    });
-
-    // ==========================================
-    // XỬ LÝ NÚT BẤM (CALLBACK QUERY)
-    // ==========================================
+    // CALLBACK QUERY XỬ LÝ NÚT BẤM
     bot.on('callback_query', (query) => {
         const chatId = query.from.id;
-        
+        if (checkMaintenance(chatId)) return;
+
         const now = Date.now();
-        if (userCooldowns[chatId] && (now - userCooldowns[chatId] < 1500)) {
-            bot.answerCallbackQuery(query.id, { text: '⚠️ Thao tác quá nhanh, từ từ thôi sếp ơi!' });
+        if (userCooldowns[chatId] && (now - userCooldowns[chatId] < 800)) {
+            bot.answerCallbackQuery(query.id, { text: '⚠️ Thao tác quá nhanh!' });
             return;
         }
         userCooldowns[chatId] = now;
 
         const user = query.from;
         const data = query.data;
-
-        let u = users[chatId];
-        if (!u) {
-            u = { 
-                name: user.first_name || 'Khách', 
-                balance: 1501, voucher: 0, wonCodes: [], 
-                linkedAccounts: JSON.parse(JSON.stringify(DEFAULT_LINKED_ACCOUNTS))
-            };
-            saveDatabase();
-        } else {
-            u.name = user.first_name || u.name;
-            Object.keys(DEFAULT_LINKED_ACCOUNTS).forEach(brand => {
-                if (!u.linkedAccounts[brand]) u.linkedAccounts[brand] = [];
-            });
-        }
+        let u = users[chatId] || { 
+            name: user.first_name || 'Khách', 
+            balance: 1501, voucher: 0, wonCodes: [], 
+            linkedAccounts: JSON.parse(JSON.stringify(DEFAULT_LINKED_ACCOUNTS))
+        };
         users[chatId] = u;
-        
-        sendLogToWeb(`🖱️ Khách [${u.name}] bấm nút: ${data}`);
 
         if (data === 'buy_code') {
-            bot.sendMessage(chatId, `
-🖤 *TRUNG TÂM MUA CODE*
-💎 *TRẠNG THÁI ĐƠN HÀNG:*
-- Đơn hàng MINI GAME: Chờ [0] | Hoàn tất [0]
-- Đơn hàng CODE MÀN: Chờ [0] | Hoàn tất [0]
-            `, {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '🎮 V2 LIÊN KẾT (SC88, C168, CM88, F8BET, QQ88, 78WIN)', callback_data: 'v2_links' }],
-                        [{ text: '🕹️ Trang Live Riêng [Hi88, 78Win..]', callback_data: 'live_pages' }],
-                        [{ text: '🔙 Quay lại', callback_data: 'back_start' }]
-                    ]
-                }
-            });
-        }
-        else if (data === 'v2_links') {
-            const cSC88 = u.linkedAccounts.SC88.length;
-            const cC168 = u.linkedAccounts.C168.length;
-            const cCM88 = u.linkedAccounts.CM88.length;
-            const cF8BET = u.linkedAccounts.F8BET.length;
-            const cQQ88 = u.linkedAccounts.QQ88.length;
-            const c78WIN = u.linkedAccounts['78WIN'].length;
+            let sc88Count = u.linkedAccounts['SC88'].length;
+            let c168Count = u.linkedAccounts['C168'].length;
+            let qqCount = u.linkedAccounts['QQ88 THỨ SÁU'].length;
+            let f8Count = u.linkedAccounts['F8BET'].length;
 
-            bot.sendMessage(chatId, `
+            let textMenu = `
 MINI GAME
-🖤 Chào *${u.name}*
+☕ Chào ${u.name}
 --------------------------------------------------
 📊 *Thống Kê Liên Kết:*
-• Liên Kết tại SC88: [${cSC88}]
-• Liên Kết tại C168: [${cC168}]
-• Liên Kết tại CM88: [${cCM88}]
-• Liên Kết tại F8BET: [${cF8BET}]
-• Liên Kết tại QQ88: [${cQQ88}]
-• Liên Kết tại 78WIN: [${c78WIN}]
+
+• Liên Kết tại SC88: [ ${sc88Count} ]
+• Liên Kết tại C168: [ ${c168Count} ]
+• Liên Kết tại QQ88 THỨ SÁU: [ ${qqCount} ]
+• Liên Kết tại F8BET: [ ${f8Count} ]
 --------------------------------------------------
-👉 Chọn trang game bên dưới để quản lý hoặc đặt đơn:
-            `, {
+👉 Đơn hàng được đặt hàng bằng tài khoản liên kết với bot theo từng trang game.
+            `;
+
+            bot.sendMessage(chatId, textMenu, {
                 parse_mode: 'Markdown',
                 reply_markup: {
                     inline_keyboard: [
-                        [
-                            { text: `🎯 SC88 (${cSC88})`, callback_data: 'manage_SC88' },
-                            { text: `🎯 C168 (${cC168})`, callback_data: 'manage_C168' }
-                        ],
-                        [
-                            { text: `🎯 CM88 (${cCM88})`, callback_data: 'manage_CM88' },
-                            { text: `🎯 F8BET (${cF8BET})`, callback_data: 'manage_F8BET' }
-                        ],
-                        [
-                            { text: `🎯 QQ88 (${cQQ88})`, callback_data: 'manage_QQ88' },
-                            { text: `🎯 78WIN (${c78WIN})`, callback_data: 'manage_78WIN' }
-                        ],
-                        [{ text: '📖 HƯỚNG DẪN - CHI TIẾT', callback_data: 'guide_detail' }],
-                        [{ text: '🔙 Quay lại', callback_data: 'buy_code' }]
+                        [{ text: `▶ SC88 (Đã liên kết: ${sc88Count})`, callback_data: 'page_SC88' }],
+                        [{ text: `▶ C168 (Đã liên kết: ${c168Count})`, callback_data: 'page_C168' }],
+                        [{ text: `▶ QQ88 THỨ SÁU (Đã liên kết: ${qqCount})`, callback_data: 'page_QQ88 THỨ SÁU' }],
+                        [{ text: `▶ F8BET (Đã liên kết: ${f8Count})`, callback_data: 'page_F8BET' }],
+                        [{ text: '📖 HƯỚNG DẪN - CHI TIẾT', callback_data: 'guide' }],
+                        [{ text: '<<<< Quay lại', callback_data: 'back_start' }]
                     ]
                 }
             });
         }
-        else if (data === 'guide_detail') {
+        else if (data.startsWith('page_')) {
+            const brand = data.replace('page_', '');
+            let count = u.linkedAccounts[brand] ? u.linkedAccounts[brand].length : 0;
+
             bot.sendMessage(chatId, `
-📖 *HƯỚNG DẪN SỬ DỤNG HỆ THỐNG HENDY CYBERTECH*
+📍 *TRANG: ${brand} MINI GAME*
 --------------------------------------------------
-1️⃣ *Liên Kết Tài Khoản SLL:* 
-   - Gửi theo cú pháp: \`Tài khoản | Mật khẩu | Brand\`
-   - (Ví dụ: \`acc123 | 123456 | QQ88\`)
-2️⃣ *Trung Tâm Khách Hàng:* 
-   - Xem tổng quan số dư ví, số lượng tài khoản đã liên kết và lịch sử trúng code trực tuyến qua giao diện web.
---------------------------------------------------
-💡 *Mọi thắc mắc vui lòng liên hệ @hendyngo hỗ trợ để được giải đáp!*
+Số tài khoản đã liên kết: *${count}*
+
+Chọn gói dịch vụ để đặt đơn:
             `, {
                 parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: [[{ text: '🔙 Quay lại', callback_data: 'v2_links' }]] }
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: `📦 ${brand} RANDOM 68 138 288 - 35,000đ`, callback_data: `buy_${brand}_pack1` }],
+                        [{ text: `📦 ${brand} GÓI CAM KẾT 272 ĐIỂM - 77,000đ`, callback_data: `buy_${brand}_pack2` }],
+                        [{ text: `📦 ĐƠN NHIỀU ACC | ${brand} | TỐI THIỂU 340 ĐIỂM - 105,000đ`, callback_data: `buy_${brand}_pack3` }],
+                        [{ text: `📋 QUẢN LÝ LIÊN KẾT - ${brand} MINI GAME`, callback_data: `manage_${brand}` }],
+                        [{ text: '◀ Quay lại', callback_data: 'buy_code' }]
+                    ]
+                }
             });
         }
         else if (data.startsWith('manage_')) {
             const brand = data.replace('manage_', '');
-            const accounts = u.linkedAccounts[brand] || [];
+            if (!u.linkedAccounts[brand]) u.linkedAccounts[brand] = [];
+            const accounts = u.linkedAccounts[brand];
             let keyboard = [];
             
+            let msgText = `📂 *QUẢN LÝ TÀI KHOẢN TẠI ${brand}*\n--------------------------------------------------\n`;
             if (accounts.length === 0) {
-                bot.sendMessage(chatId, `📂 *DANH SÁCH TÀI KHOẢN (${brand})*\n--------------------------------------------------\nChưa liên kết tài khoản nào.`, {
-                    parse_mode: 'Markdown',
-                    reply_markup: { inline_keyboard: [[{ text: `➕ THÊM LIÊN KẾT | ACC ${brand}`, callback_data: `link_${brand}` }], [{ text: '🔙 Quay lại', callback_data: 'v2_links' }]] }
-                });
+                msgText += `⚠️ Bạn chưa có tài khoản nào đã liên kết tại trang này.\nVui lòng thêm liên kết trước khi đặt đơn.\n`;
+                keyboard.push([{ text: `➕ THÊM LIÊN KẾT | ACC XEM LIVE ${brand} MINI GAME`, callback_data: `link_${brand}` }]);
             } else {
-                let msgText = `📂 *DANH SÁCH TÀI KHOẢN (${brand})*\n--------------------------------------------------\n`;
-                accounts.forEach((acc, index) => {
-                    msgText += `${index + 1}. TK: \`${acc.tk}\` - Code: \`${acc.miniCode}\`\n`;
-                    keyboard.push([{ text: `❌ Xóa ${acc.tk}`, callback_data: `del_${brand}_${index}` }]);
+                accounts.forEach((acc, idx) => {
+                    msgText += `${idx + 1}. TK: \`${acc.tk}\`\n`;
+                    keyboard.push([{ text: `❌ Xóa tài khoản ${acc.tk}`, callback_data: `del_${brand}_${idx}` }]);
                 });
-                keyboard.push([{ text: `➕ THÊM LIÊN KẾT | ACC ${brand}`, callback_data: `link_${brand}` }]);
-                keyboard.push([{ text: '🔙 Quay lại', callback_data: 'v2_links' }]);
-
-                bot.sendMessage(chatId, msgText, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+                keyboard.push([{ text: `➕ THÊM LIÊN KẾT MỚI`, callback_data: `link_${brand}` }]);
             }
-        }
-        else if (data.startsWith('del_')) {
-            const parts = data.replace('del_', '').split('_');
-            const brand = parts[0];
-            const index = parseInt(parts[1]);
+            keyboard.push([{ text: '◀ Quay lại', callback_data: `page_${brand}` }]);
 
-            if (u.linkedAccounts[brand] && u.linkedAccounts[brand][index]) {
-                const removed = u.linkedAccounts[brand].splice(index, 1)[0];
-                saveDatabase();
-                bot.sendMessage(chatId, `🗑️ Đã xóa tài khoản \`${removed.tk}\` khỏi ${brand}!`, { parse_mode: 'Markdown' });
-                sendLogToWeb(`🗑️ Khách [${u.name}] đã xóa tài khoản ${removed.tk} khỏi ${brand}`);
-            }
-            bot.answerCallbackQuery(query.id, { text: 'Đã xóa thành công!' });
-            return;
+            bot.sendMessage(chatId, msgText, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
         }
         else if (data.startsWith('link_')) {
             const brand = data.replace('link_', '');
             userStates[chatId] = { step: 'WAITING_FOR_CREDENTIALS', brand: brand };
             bot.sendMessage(chatId, `
-📍 *TRANG: ${brand} MINI GAME*
---------------------------------------------------
-🔒 Vui lòng gửi thông tin theo cú pháp SLL:
-\`Tài khoản | Mật khẩu | Brand\`
-*(Ví dụ: acc123 | 123456 | ${brand})*
+📍 *THÊM TÀI KHOẢN XEM LIVE ${brand}*
+Gửi thông tin theo cú pháp:
+\`Tài khoản | Mật khẩu\`
+*(Ví dụ: player01 | 123456)*
             `, { parse_mode: 'Markdown' });
+        }
+        else if (data.startsWith('del_')) {
+            const parts = data.split('_');
+            const brand = parts[1];
+            const idx = parseInt(parts[2]);
+            if (u.linkedAccounts[brand] && u.linkedAccounts[brand][idx]) {
+                u.linkedAccounts[brand].splice(idx, 1);
+                saveDatabase();
+                bot.answerCallbackQuery(query.id, { text: 'Đã xóa tài khoản thành công!' });
+                bot.sendMessage(chatId, `✅ Đã xóa tài khoản khỏi ${brand}.`);
+            }
+        }
+        else if (data === 'guide') {
+            bot.sendMessage(chatId, '📖 *HƯỚNG DẪN SỬ DỤNG*\n1. Chọn trang game.\n2. Thêm tài khoản liên kết (Tài khoản | Mật khẩu).\n3. Đặt gói cược và trải nghiệm mini game!', { parse_mode: 'Markdown' });
         }
         else if (data === 'deposit') {
             userStates[chatId] = { step: 'WAITING_FOR_DEPOSIT_AMOUNT' };
-            bot.sendMessage(chatId, '💵 Nhập số tiền sếp muốn nạp vào ví (Tối thiểu 10.000đ):');
+            bot.sendMessage(chatId, '💵 Vui lòng nhập số tiền bạn muốn nạp vào ví (Tối thiểu 10.000 VNĐ):');
         }
         else if (data === 'customer_center') {
             let linkedList = [];
             Object.keys(u.linkedAccounts || {}).forEach(brand => {
-                u.linkedAccounts[brand].forEach(acc => { linkedList.push(`[${brand}] ${acc.tk} (${acc.miniCode})`); });
+                u.linkedAccounts[brand].forEach(acc => { linkedList.push(`[${brand}] ${acc.tk}`); });
             });
-            let wonList = u.wonCodes || [];
-            const dashboardUrl = `https://ngogiaidy56-eng.github.io/?name=${encodeURIComponent(u.name)}&id=${chatId}&balance=${u.balance}&linked_list=${encodeURIComponent(JSON.stringify(linkedList))}&won_list=${encodeURIComponent(JSON.stringify(wonList))}`;
-
-            bot.sendMessage(chatId, `📇 *TRUNG TÂM QUẢN LÝ TÀI KHOẢN*\n--------------------------------------------------\n✅ *Hệ thống đã chuẩn bị link quản lý riêng cho bạn!*`, {
+            const dashUrl = `https://ngogiaidy56-eng.github.io/?name=${encodeURIComponent(u.name)}&id=${chatId}&balance=${u.balance}&linked_list=${encodeURIComponent(JSON.stringify(linkedList))}`;
+            bot.sendMessage(chatId, `📇 *TRUNG TÂM KHÁCH HÀNG*\nTruy cập bảng điều khiển trực tuyến:`, {
                 parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: [[{ text: '🚀 MỞ TRUNG TÂM KHÁCH HÀNG', url: dashboardUrl }], [{ text: '🔙 Quay lại', callback_data: 'back_start' }]] }
+                reply_markup: { inline_keyboard: [[{ text: '🚀 MỞ WEB QUẢN LÝ', url: dashUrl }], [{ text: '◀ Quay lại', callback_data: 'back_start' }]] }
             });
         }
         else if (data === 'back_start') {
-            bot.sendMessage(chatId, '🏠 Nhắn /start để quay lại bảng điều khiển chính.');
+            bot.sendMessage(chatId, '🏠 Nhập /start để về màn hình chính.');
+        }
+        else if (data === 'admin_server_status' && chatId.toString() === ADMIN_ID) {
+            const totalUsers = Object.keys(users).length;
+            const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024;
+            bot.sendMessage(chatId, `⚙️ *THÔNG SỐ MÁY CHỦ*\n• Tổng User: \`${totalUsers}\`\n• RAM: \`${memoryUsage.toFixed(2)} MB\``, { parse_mode: 'Markdown' });
+        }
+        else if (data === 'admin_list_users' && chatId.toString() === ADMIN_ID) {
+            let userKeys = Object.keys(users);
+            let textList = `👥 *DANH SÁCH USER (${userKeys.length})*\n--------------------------------------------------\n`;
+            userKeys.slice(0, 15).forEach((uid, idx) => {
+                let usr = users[uid];
+                let totalAcc = Object.values(usr.linkedAccounts || {}).reduce((s, arr) => s + arr.length, 0);
+                textList += `${idx + 1}. *${usr.name}* (ID: \`${uid}\`) - Ví: \`${usr.balance}đ\` - Acc: \`${totalAcc}\`\n`;
+            });
+            bot.sendMessage(chatId, textList, { parse_mode: 'Markdown' });
         }
 
         bot.answerCallbackQuery(query.id);
     });
 
-    // XỬ LÝ NHẬP LIỆU VĂN BẢN VÀ HỖ TRỢ SLL (CÚ PHÁP MỚI: Tài khoản | Mật khẩu | Brand)
+    // XỬ LÝ NHẬP LIỆU VĂN BẢN
     bot.on('message', (msg) => {
         const chatId = msg.chat.id.toString();
         const text = msg.text;
         if (!text || text.startsWith('/')) return;
+        if (checkMaintenance(chatId)) return;
         
         let u = users[chatId];
-        if (!u) {
-            u = { 
-                name: msg.from.first_name || 'Khách', 
-                balance: 1501, voucher: 0, wonCodes: [], 
-                linkedAccounts: JSON.parse(JSON.stringify(DEFAULT_LINKED_ACCOUNTS))
-            };
-            saveDatabase();
-        } else {
-            u.name = msg.from.first_name || u.name;
-            Object.keys(DEFAULT_LINKED_ACCOUNTS).forEach(brand => {
-                if (!u.linkedAccounts[brand]) u.linkedAccounts[brand] = [];
-            });
-        }
-        users[chatId] = u;
-
-        sendLogToWeb(`💬 Khách [${u.name}] nhắn: ${text}`);
+        if (!u) return;
 
         if (userStates[chatId]?.step === 'WAITING_FOR_DEPOSIT_AMOUNT') {
             const amount = parseInt(text.replace(/\D/g, ''));
             if (amount >= 10000) {
                 const qrUrl = `https://img.vietqr.io/image/MB-0123456789ABC-compact2.png?amount=${amount}&addInfo=HENDY${chatId}`;
-                bot.sendPhoto(chatId, qrUrl, { 
-                    caption: `⚡ *LỆNH NẠP TIỀN TỰ ĐỘNG*\n💵 Số tiền: \`${amount.toLocaleString()} VNĐ\`\n📝 Nội dung chuyển khoản: \`HENDY${chatId}\``,
-                    parse_mode: 'Markdown'
-                });
-                sendLogToWeb(`💵 Khách [${u.name}] tạo lệnh nạp: ${amount.toLocaleString()} VNĐ`);
+                bot.sendPhoto(chatId, qrUrl, { caption: `⚡ NẠP TIỀN\nSố tiền: \`${amount.toLocaleString()} VNĐ\`\nNội dung: \`HENDY${chatId}\``, parse_mode: 'Markdown' });
                 delete userStates[chatId];
             } else {
-                bot.sendMessage(chatId, '⚠️ Số tiền nạp tối thiểu là 10.000 VNĐ!');
+                bot.sendMessage(chatId, '⚠️ Số tiền tối thiểu là 10.000 VNĐ!');
             }
             return;
         }
 
-        // Xử lý nhập SLL / Liên kết tài khoản với cú pháp mới: Tài khoản | Mật khẩu | Brand
-        const lines = text.split('\n');
-        let successList = [];
-        let duplicateCount = 0;
-        let errorCount = 0;
-        let limitExceededCount = 0;
-        const MAX_ACCOUNTS = 4;
-
-        // KIỂM TRA QUYỀN ADMIN: Nếu là Admin thì KHÔNG BỊ GIỚ HẠN (không giới hạn 4 acc)
-        const isAdmin = (chatId === ADMIN_ID);
-
-        let totalCurrentAccounts = Object.values(u.linkedAccounts).reduce((sum, arr) => sum + arr.length, 0);
-
-        for (let i = 0; i < lines.length; i++) {
-            let line = lines[i].trim();
-            if (line === '') continue;
-
-            let parts = line.split('|').map(s => s.trim());
-
+        if (userStates[chatId]?.step === 'WAITING_FOR_CREDENTIALS') {
+            const brand = userStates[chatId].brand;
+            let parts = text.split('|').map(s => s.trim());
             if (parts.length >= 2) {
                 let tk = parts[0];
                 let mk = parts[1];
-                // Cú pháp mới: Tài khoản | Mật khẩu | Brand
-                let brand = parts.length >= 3 ? parts[2].toUpperCase() : (userStates[chatId]?.brand || 'SC88');
-                let miniCode = tk;
-
-                // Nếu brand nhập vào không tồn tại trong hệ thống, mặc định đẩy về SC88 hoặc lấy theo state
-                if (!DEFAULT_LINKED_ACCOUNTS.hasOwnProperty(brand)) {
-                    brand = userStates[chatId]?.brand || 'SC88';
-                }
-
-                if (!u.linkedAccounts[brand]) {
-                    u.linkedAccounts[brand] = [];
-                }
-
-                // Kiểm tra giới hạn tài khoản (Admin được miễn hoàn toàn)
-                if (!isAdmin && totalCurrentAccounts >= MAX_ACCOUNTS) {
-                    limitExceededCount++;
-                    continue;
-                }
-
-                let isDuplicate = u.linkedAccounts[brand].some(a => a.tk.toLowerCase() === tk.toLowerCase());
-
-                if (isDuplicate) {
-                    duplicateCount++;
+                let isDup = u.linkedAccounts[brand].some(a => a.tk.toLowerCase() === tk.toLowerCase());
+                if (isDup) {
+                    bot.sendMessage(chatId, `⚠️ Tài khoản \`${tk}\` đã tồn tại trong ${brand}!`, { parse_mode: 'Markdown' });
                 } else {
-                    u.linkedAccounts[brand].push({ tk, mk, miniCode });
-                    totalCurrentAccounts++;
-                    successList.push(`[${tk}] tại ${brand}`);
-
-                    if (masterWebSocket && masterWebSocket.readyState === WebSocket.OPEN) {
-                        masterWebSocket.send(JSON.stringify({
-                            action: 'SYNC_TELE_ACCOUNT',
-                            value: { tk: tk, mk: mk, tab: miniCode, brand: brand, sender: u.name },
-                            channel: currentChannel
-                        }));
-                    }
+                    u.linkedAccounts[brand].push({ tk, mk });
+                    saveDatabase();
+                    bot.sendMessage(chatId, `✅ Liên kết thành công tài khoản \`${tk}\` vào *${brand}*!`, { parse_mode: 'Markdown' });
                 }
             } else {
-                errorCount++;
+                bot.sendMessage(chatId, '❌ Sai cú pháp! Vui lòng nhập định dạng: `Tài khoản | Mật khẩu`', { parse_mode: 'Markdown' });
             }
-        }
-
-        if (successList.length > 0) {
-            saveDatabase();
-        }
-
-        let replyMsg = "";
-        if (successList.length > 0) {
-            let timeNow = new Date().toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-            replyMsg += `🥰 *Ting ting! Chốt đơn ${successList.length} acc lúc ${timeNow}:*\n`;
-            successList.forEach(accInfo => {
-                replyMsg += `👉 ${accInfo}\n`;
-            });
-            replyMsg += `\n`;
-        }
-
-        if (duplicateCount > 0) {
-            replyMsg += `😅 *Quen quen nha!* Bỏ qua **${duplicateCount} acc** đã có sẵn trên hệ thống.\n`;
-        }
-
-        if (limitExceededCount > 0) {
-            replyMsg += `😢 *Giỏ hàng đầy!* Từ chối **${limitExceededCount} acc** (Khách thường tối đa ${MAX_ACCOUNTS} acc).\n`;
-        }
-
-        if (errorCount > 0 && successList.length === 0 && duplicateCount === 0) {
-            replyMsg += `🤪 *Lạc nhịp rồi!* Bỏ qua **${errorCount} dòng** sai cú pháp (Chuẩn: Tài khoản | Mật khẩu | Brand).\n`;
-        }
-
-        if (successList.length === 0) {
-            if (duplicateCount > 0 && limitExceededCount === 0) {
-                replyMsg = `😅 *Toàn hàng cũ!* Các tài khoản này bạn đã liên kết hết từ trước rồi nha.`;
-            } else if (limitExceededCount > 0) {
-                replyMsg = `😢 *Kho đã đầy!* Bạn đã chạm nóc giới hạn ${MAX_ACCOUNTS} tài khoản rồi, không nhét thêm được đâu nè.`;
-            }
-        }
-
-        if (replyMsg !== "") {
-            bot.sendMessage(chatId, replyMsg, { 
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [[
-                        { text: "🌟 Tuyệt!", callback_data: "awesome" }, 
-                        { text: "📜 Lịch sử", callback_data: "customer_center" },
-                        { text: "🚑 Xem mẫu", callback_data: "guide_detail" }
-                    ]]
-                }
-            });
-        }
-
-        if (userStates[chatId]?.step === 'WAITING_FOR_CREDENTIALS') {
             delete userStates[chatId];
         }
     });
 }
 
-// ==========================================
-// 3. KẾT NỐI WEBSOCKET VỚI TRẠM MẸ
-// ==========================================
-function connectToMasterHub() {
-    const wsUrl = 'wss://hendy-server-pro-production.up.railway.app'; 
-    const ws = new WebSocket(wsUrl);
-    
-    ws.on('open', () => { 
-        console.log('⚡ Bot Node.js đã kết nối với WebSocket Trạm Mẹ thành công!'); 
-        masterWebSocket = ws; 
-        
-        ws.send(JSON.stringify({ 
-            action: 'RES_TELEGRAM_STATUS', 
-            status: bot ? 'RUNNING' : 'STOPPED', 
-            channel: currentChannel 
-        }));
-    });
-
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
-            if (data.channel && data.channel !== currentChannel && data.action.startsWith('CMD_')) return;
-
-            if (data.action === 'CMD_START_TELEGRAM') {
-                if (data.token) currentToken = data.token;
-                if (data.adminId) currentAdminId = data.adminId;
-                if (data.channel) currentChannel = data.channel;
-                
-                let isSuccess = startBot(currentToken);
-                if (isSuccess) sendLogToWeb('✅ Đã bật Bot Telegram từ xa thành công!');
-            }
-            else if (data.action === 'CMD_STOP_TELEGRAM') {
-                if (bot) {
-                    bot.stopPolling();
-                    bot = null;
-                    sendLogToWeb('🛑 Đã TẮT Bot Telegram từ xa!');
-                    ws.send(JSON.stringify({ action: 'RES_TELEGRAM_STATUS', status: 'STOPPED', channel: currentChannel }));
-                }
-            }
-            else if (data.action === 'CMD_TELEGRAM_BROADCAST') {
-                if (bot && currentAdminId) {
-                    bot.sendMessage(currentAdminId, `📢 *THÔNG BÁO TỪ TRUNG TÂM ĐIỀU KHIỂN:*\n\n${data.message}`, { parse_mode: 'Markdown' })
-                       .catch(err => sendLogToWeb(`❌ Lỗi gửi tin phát loa: ${err.message}`));
-                    sendLogToWeb(`📢 Đã gửi loa thành công tới Admin!`);
-                }
-            }
-        } catch (err) {
-            console.error("❌ Lỗi parse dữ liệu WebSocket:", err.message);
-        }
-    });
-
-    ws.on('close', () => { 
-        masterWebSocket = null; 
-        setTimeout(connectToMasterHub, 5000); 
-    });
-    ws.on('error', () => {});
-}
-
-// ==========================================
-// KHỞI CHẠY HỆ THỐNG
-// ==========================================
+// Khởi chạy hệ thống
 loadDatabase(); 
-startBot(currentToken); 
-connectToMasterHub(); 
-
-console.log('🤖 Module Hendy Cybertech Pro (Updated Version) đang chạy...');
+startBot(currentToken);
+console.log('🚀 Hệ thống Bot Telegram Mini Game đã sẵn sàng!');
