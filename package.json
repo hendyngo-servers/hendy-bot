@@ -1,16 +1,13 @@
 {
-  "name": "hendy-tele-bot",
+  "name": "hendy-bot",
   "version": "1.0.0",
-  "description": "Telegram Bot Hendy Cybertech",
-  "main": "index.js",
+  "description": "Hendy Bot Telegram",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.66.0",
     "ws": "^8.16.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   }
 }
