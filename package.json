@@ -1,18 +1,16 @@
 {
-  "name": "hendy-bot",
+  "name": "hendy-tele-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Telegram Bot Hendy Cybertech",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
-    "node-telegram-bot-api": "^1.2.0",
-    "ws": "^8.21.3"
+    "node-telegram-bot-api": "^0.66.0",
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
