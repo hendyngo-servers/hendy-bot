@@ -1,742 +1,191 @@
-const TelegramBotModule = require('node-telegram-bot-api');
-const TelegramBot = TelegramBotModule.default || TelegramBotModule;
-const WebSocket = require('ws');
-const fs = require('fs');
-const path = require('path');
-
-// ==========================================
-// ⚙️ CẤU HÌNH MẶC ĐỊNH & HỆ THỐNG
-// ==========================================
-const WS_PORT = process.env.PORT || 8080;
-let currentToken = process.env.BOT_TOKEN || '8689114890:AAFBFM0rNtZWpOtAovIPHPVQTJVp0odU1DQ'; 
-let currentAdminId = ''; 
-let currentChannel = 'KENH-1'; 
-let bot = null;
-
-// Cấu hình ID của Admin
-const ADMIN_ID = '6138197737'; 
-
-// Cấu hình Database
-const DB_FILE = path.join(__dirname, 'database.json');
-let users = {};
-const userStates = {};
-const userCooldowns = {}; 
-let masterWebSocket = null;
-
-// Khung cấu trúc tài khoản mặc định (Bổ sung QQ88 và 78WIN)
-const DEFAULT_LINKED_ACCOUNTS = { 
-    SC88: [], 
-    C168: [], 
-    CM88: [], 
-    F8BET: [], 
-    QQ88: [], 
-    '78WIN': [] 
-};
-
-// ==========================================
-// 🗄️ HÀM LƯU & ĐỌC DATABASE (CÓ TỰ ĐỘNG BACKUP)
-// ==========================================
-function loadDatabase() {
-    try {
-        if (fs.existsSync(DB_FILE)) {
-            const data = fs.readFileSync(DB_FILE, 'utf8');
-            users = JSON.parse(data);
-            // Đảm bảo user cũ cũng có đủ các brand mới
-            Object.keys(users).forEach(uid => {
-                if (!users[uid].linkedAccounts) {
-                    users[uid].linkedAccounts = JSON.parse(JSON.stringify(DEFAULT_LINKED_ACCOUNTS));
-                } else {
-                    Object.keys(DEFAULT_LINKED_ACCOUNTS).forEach(brand => {
-                        if (!users[uid].linkedAccounts[brand]) {
-                            users[uid].linkedAccounts[brand] = [];
-                        }
-                    });
-                }
-            });
-            console.log(`✅ Đã tải dữ liệu của ${Object.keys(users).length} khách hàng từ database.json`);
-        } else {
-            console.log('⚠️ Không tìm thấy database.json, sẽ tạo mới file khi có dữ liệu.');
-            users = {};
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trung Tâm Khách Hàng - Hendy Cybertech</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: #0b0f19;
+            color: #f3f4f6;
         }
-    } catch (err) {
-        console.error('❌ Lỗi khi đọc file database.json:', err);
-        users = {}; 
-    }
-}
-
-function saveDatabase() {
-    try {
-        if (fs.existsSync(DB_FILE)) {
-            const backupPath = path.join(__dirname, 'database_backup.json');
-            fs.copyFileSync(DB_FILE, backupPath);
+        .glass-card {
+            background: rgba(17, 24, 39, 0.75);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
         }
-        fs.writeFileSync(DB_FILE, JSON.stringify(users, null, 4), 'utf8');
-    } catch (err) {
-        console.error('❌ Lỗi khi lưu file database.json:', err);
-    }
-}
+        .neon-glow {
+            box-shadow: 0 0 25px rgba(99, 102, 241, 0.15);
+        }
+        .tab-active {
+            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-gray-950 to-black">
 
-// ==========================================
-// 1. HÀM GỬI LOG VỀ GIAO DIỆN TRẠM MẸ (WEB)
-// ==========================================
-function sendLogToWeb(msg) {
-    if (masterWebSocket && masterWebSocket.readyState === WebSocket.OPEN) {
-        masterWebSocket.send(JSON.stringify({
-            action: 'RES_TELEGRAM_LOG',
-            message: msg,
-            channel: currentChannel
-        }));
-    }
-    console.log(`[BOT LOG] ${msg}`);
-}
+    <div class="max-w-4xl w-full mx-auto p-4 sm:p-6 mt-4 sm:mt-8">
+        <!-- HEADER PROFILE -->
+        <div class="glass-card rounded-3xl p-6 sm:p-8 neon-glow relative overflow-hidden">
+            <div class="absolute -right-10 -top-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
+            <div class="flex flex-col sm:flex-row items-center justify-between gap-6 relative z-10">
+                <div class="flex items-center gap-4 text-center sm:text-left">
+                    <div class="relative">
+                        <div class="w-20 h-20 rounded-2xl bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center text-3xl font-bold shadow-lg shadow-indigo-500/30">
+                            🐼
+                        </div>
+                        <span class="absolute -bottom-2 -right-2 bg-amber-500 text-black text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wider shadow">VIP PRO</span>
+                    </div>
+                    <div>
+                        <h1 id="user-name" class="text-2xl font-bold tracking-tight text-white">@Khách hàng</h1>
+                        <p class="text-xs text-indigo-400 font-medium mt-1 flex items-center justify-center sm:justify-start gap-1.5">
+                            <i class="fa-solid fa-id-badge"></i> ID Telegram: <span id="user-id" class="text-gray-300 font-mono">--</span>
+                        </p>
+                    </div>
+                </div>
 
-// ==========================================
-// 2. HÀM KHỞI ĐỘNG VÀ CÀI ĐẶT LOGIC BOT
-// ==========================================
-function startBot(token) {
-    if (bot) {
-        try { bot.stopPolling(); } catch (e) {}
-        bot = null;
-    }
-    
-    try {
-        bot = new TelegramBot(token, { polling: true });
-        setupBotLogic();
-        console.log('🤖 Bot Telegram đã khởi động thành công!');
+                <!-- WALLETS -->
+                <div class="flex flex-row sm:flex-col gap-3 w-full sm:w-auto justify-center">
+                    <div class="bg-gray-900/80 border border-gray-800 rounded-2xl px-5 py-3 text-center sm:text-right flex-1">
+                        <span class="text-[11px] text-gray-400 uppercase tracking-wider block font-semibold">Ví Chính (Nạp)</span>
+                        <span id="user-balance" class="text-lg sm:text-xl font-extrabold text-emerald-400 font-mono">0đ</span>
+                    </div>
+                    <div class="bg-gray-900/80 border border-gray-800 rounded-2xl px-5 py-3 text-center sm:text-right flex-1">
+                        <span class="text-[11px] text-gray-400 uppercase tracking-wider block font-semibold">Ví Voucher</span>
+                        <span id="user-voucher" class="text-lg sm:text-xl font-extrabold text-amber-400 font-mono">0đ</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- STATS COUNTERS -->
+        <div class="grid grid-cols-2 gap-4 mt-6">
+            <div class="glass-card rounded-2xl p-5 text-center border-gray-800/80">
+                <span class="text-xs text-gray-400 uppercase font-bold tracking-wider block mb-1">Tài khoản đã liên kết</span>
+                <span id="count-linked" class="text-2xl sm:text-3xl font-extrabold text-indigo-400 font-mono">0</span>
+            </div>
+            <div class="glass-card rounded-2xl p-5 text-center border-gray-800/80">
+                <span class="text-xs text-gray-400 uppercase font-bold tracking-wider block mb-1">Mã Code đã trúng</span>
+                <span id="count-won" class="text-2xl sm:text-3xl font-extrabold text-emerald-400 font-mono">0</span>
+            </div>
+        </div>
+
+        <!-- TABS -->
+        <div class="flex gap-3 mt-6 bg-gray-900/60 p-1.5 rounded-2xl border border-gray-800">
+            <button onclick="switchTab('linked')" id="btn-tab-linked" class="flex-1 py-3 rounded-xl font-bold text-sm transition-all duration-300 tab-active flex items-center justify-center gap-2">
+                <i class="fa-solid fa-link"></i> Tài Khoản Liên Kết
+            </button>
+            <button onclick="switchTab('won')" id="btn-tab-won" class="flex-1 py-3 rounded-xl font-bold text-sm transition-all duration-300 text-gray-400 hover:text-white flex items-center justify-center gap-2">
+                <i class="fa-solid fa-gift"></i> Lịch Sử Trúng Code
+            </button>
+        </div>
+
+        <!-- CONTENT LINKED -->
+        <div id="content-linked" class="mt-6 space-y-3"></div>
+
+        <!-- CONTENT WON -->
+        <div id="content-won" class="mt-6 space-y-3 hidden"></div>
+    </div>
+
+    <footer class="text-center py-6 text-xs text-gray-500 border-t border-gray-900 mt-10">
+        HENDY CYBERTECH PRO &copy; 2026 - All Rights Reserved ❤️
+    </footer>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const name = urlParams.get('name') || 'Khách hàng';
+        const id = urlParams.get('id') || 'N/A';
+        const balance = parseInt(urlParams.get('balance') || '0');
+        const voucher = parseInt(urlParams.get('voucher') || '0');
         
-        if (masterWebSocket && masterWebSocket.readyState === WebSocket.OPEN) {
-            masterWebSocket.send(JSON.stringify({ action: 'RES_TELEGRAM_STATUS', status: 'RUNNING', channel: currentChannel }));
-        }
-        return true;
-    } catch (e) {
-        console.error("❌ Lỗi khởi động bot:", e);
-        return false;
-    }
-}
+        let linkedList = [];
+        let wonList = [];
 
-function setupBotLogic() {
-    if (!bot) return;
-
-    // LỆNH /START
-    bot.onText(/\/start/, (msg) => {
-        const chatId = msg.chat.id;
-        const user = msg.from;
-
-        sendLogToWeb(`👤 Khách [${user.first_name}] (ID: ${chatId}) vừa mở Bot.`);
-
-        if (!users[chatId]) {
-            users[chatId] = {
-                name: user.first_name || 'Khách',
-                balance: 1501, voucher: 0, wonCodes: [], 
-                linkedAccounts: JSON.parse(JSON.stringify(DEFAULT_LINKED_ACCOUNTS))
-            };
-            saveDatabase();
-        } else {
-            users[chatId].name = user.first_name || users[chatId].name;
-            // Đảm bảo đủ các trường liên kết mới
-            Object.keys(DEFAULT_LINKED_ACCOUNTS).forEach(brand => {
-                if (!users[chatId].linkedAccounts[brand]) {
-                    users[chatId].linkedAccounts[brand] = [];
-                }
-            });
-            saveDatabase();
-        }
-
-        const u = users[chatId];
-        const welcomeMessage = `
-🤖 *BOT HENDY CYBERTECH 2026* [BOT CHÍNH] 🚀
-Buổi chiều vui vẻ nhé, *${u.name}* (ID: \`${chatId}\`)
---------------------------------------------------
-💎 *VIP 0*
-
-💰 **Ví Chính:** \`${u.balance.toLocaleString()} VNĐ\`
-🎁 **Ví Voucher:** \`${u.voucher.toLocaleString()} VNĐ\`
---------------------------------------------------
-👉 Trang Chủ Website: https://hendy-cybertech.com
-        `;
-
-        bot.sendMessage(chatId, welcomeMessage, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '🎟️ TRUNG TÂM MUA CODE', callback_data: 'buy_code' }],
-                    [{ text: '💳 NẠP TIỀN', callback_data: 'deposit' }],
-                    [{ text: '📇 TRUNG TÂM KHÁCH HÀNG', callback_data: 'customer_center' }],
-                    [{ text: '👥 NHÓM GIAO LƯU', url: 'https://t.me/Hendy_Support_Group' }]
-                ]
-            }
-        });
-    });
-
-    // ==========================================
-    // 🛡️ HỆ THỐNG LỆNH ADMIN TỐI ƯU GỌN GÀNG
-    // ==========================================
-    bot.onText(/\/admin/, (msg) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) {
-            bot.sendMessage(chatId, '⛔ Sếp không có quyền sử dụng bảng điều khiển này!');
-            return;
-        }
-
-        const adminMenuText = `
-🛠️ *BẢNG QUẢN TRỊ HỆ THỐNG (ADMIN PANEL)*
---------------------------------------------------
-• \`/status\` - Kiểm tra trạng thái hệ thống
-• \`/user [ID]\` - Xem thông tin chi tiết khách hàng
-• \`/addmoney [ID] [Số tiền]\` - Cộng/trừ tiền ví chính
-• \`/trungcode [ID] [Trang] [TàiKhoản] [MãCode]\` - Cấp code cho khách
-• \`/broadcast [Nội dung]\` - Phát loa toàn hệ thống
-        `;
-
-        bot.sendMessage(chatId, adminMenuText, { parse_mode: 'Markdown' });
-    });
-
-    bot.onText(/\/status/, (msg) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) return;
-
-        const totalUsers = Object.keys(users).length;
-        const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024;
-
-        const statusText = `
-⚙️ *TRẠNG THÁI HỆ THỐNG BOT*
---------------------------------------------------
-👥 Tổng số khách hàng: \`${totalUsers}\`
-🧠 RAM đang sử dụng: \`${memoryUsage.toFixed(2)} MB\`
-⚡ Trạng thái WebSocket: \`${masterWebSocket && masterWebSocket.readyState === WebSocket.OPEN ? 'ĐÃ KẾT NỐI' : 'MẤT KẾT NỐI'}\`
-🕒 Thời gian hoạt động: \`${(process.uptime() / 60).toFixed(1)} phút\`
-        `;
-        bot.sendMessage(chatId, statusText, { parse_mode: 'Markdown' });
-    });
-
-    bot.onText(/\/broadcast (.+)/, (msg, match) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) return;
-
-        const broadcastMessage = match[1];
-        let successCount = 0;
-
-        Object.keys(users).forEach(uid => {
-            bot.sendMessage(uid, `📢 *THÔNG BÁO TỪ HỆ THỐNG:*\n\n${broadcastMessage}`, { parse_mode: 'Markdown' })
-               .catch(() => {});
-            successCount++;
-        });
-
-        bot.sendMessage(chatId, `✅ Đã phát loa thành công tới \`${successCount}\` khách hàng!`);
-    });
-
-    bot.onText(/\/user (\d+)/, (msg, match) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) return;
-
-        const targetId = match[1];
-        const uInfo = users[targetId];
-
-        if (!uInfo) {
-            bot.sendMessage(chatId, `❌ Không tìm thấy thông tin của user ID: \`${targetId}\``, { parse_mode: 'Markdown' });
-            return;
-        }
-
-        let linkSummary = '';
-        Object.keys(uInfo.linkedAccounts || {}).forEach(brand => {
-            const accs = uInfo.linkedAccounts[brand];
-            if (accs.length > 0) {
-                linkSummary += `\n• *${brand}* (${accs.length}): `;
-                accs.forEach(a => linkSummary += `\`${a.tk}\` `);
-            }
-        });
-
-        const userInfoText = `
-👤 *THÔNG TIN KHÁCH HÀNG*
---------------------------------------------------
-🆔 ID: \`${targetId}\`
-🏷️ Tên: \`${uInfo.name}\`
-💰 Ví chính: \`${uInfo.balance.toLocaleString()} VNĐ\`
-🎁 Voucher: \`${uInfo.voucher.toLocaleString()} VNĐ\`
-🏆 Số code đã trúng: \`${(uInfo.wonCodes || []).length}\`
-🔗 Tài khoản liên kết:${linkSummary || '\nChưa có liên kết nào'}
-        `;
-        bot.sendMessage(chatId, userInfoText, { parse_mode: 'Markdown' });
-    });
-
-    bot.onText(/\/addmoney (\d+) (-?\d+)/, (msg, match) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) return;
-
-        const targetId = match[1];
-        const amount = parseInt(match[2]);
-
-        if (!users[targetId]) {
-            bot.sendMessage(chatId, `❌ Không tìm thấy user ID: \`${targetId}\``, { parse_mode: 'Markdown' });
-            return;
-        }
-
-        users[targetId].balance += amount;
-        saveDatabase();
-
-        bot.sendMessage(chatId, `✅ Đã cập nhật ví cho user \`${targetId}\`. Số dư mới: \`${users[targetId].balance.toLocaleString()} VNĐ\``, { parse_mode: 'Markdown' });
-        
-        bot.sendMessage(targetId, `💰 *BIẾN ĐỘNG SỐ DƯ*\n\nTài khoản của sếp vừa được điều chỉnh: \`${amount > 0 ? '+' : ''}${amount.toLocaleString()} VNĐ\`\n💎 Số dư hiện tại: \`${users[targetId].balance.toLocaleString()} VNĐ\``, { parse_mode: 'Markdown' })
-            .catch(() => {});
-    });
-
-    // LỆNH TRÚNG CODE
-    bot.onText(/\/trungcode (\d+) (\S+) (\S+) (\S+)/, (msg, match) => {
-        const chatId = msg.chat.id;
-        if (chatId.toString() !== ADMIN_ID) return;
-
-        const targetId = match[1];
-        const brand = match[2].toUpperCase();
-        const accountTk = match[3];
-        const wonCode = match[4];
-
-        if (!users[targetId]) {
-            bot.sendMessage(chatId, `❌ Không tìm thấy user ID: \`${targetId}\``, { parse_mode: 'Markdown' });
-            return;
-        }
-
-        const now = new Date();
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        const seconds = String(now.getSeconds()).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const year = now.getFullYear();
-
-        const formattedTime = `${hours}:${minutes}:${seconds} ngày ${day}/${month}/${year}`;
-
-        if (!users[targetId].wonCodes) {
-            users[targetId].wonCodes = [];
-        }
-        
-        users[targetId].wonCodes.push({ 
-            brand, 
-            accountTk, 
-            code: wonCode, 
-            time: formattedTime 
-        });
-        saveDatabase();
-
-        const congratText = `
-🎉 *CHÚNG MỪNG SẾP ĐÃ TRÚNG CODE!* 🏆
---------------------------------------------------
-🎯 **Trang Game:** \`${brand}\`
-👤 **Tài Khoản:** \`${accountTk}\`
-🎁 **Mã Code Nhận Thưởng:** \`🎉 ${wonCode} 🎉\`
-🕒 **Thời Gian Trúng:** \`${formattedTime}\`
---------------------------------------------------
-💡 *Mã code và thời gian đã được lưu vào hệ thống Trung Tâm Khách Hàng của sếp!*
-        `;
-
-        bot.sendMessage(targetId, congratText, { parse_mode: 'Markdown' })
-            .then(() => {
-                bot.sendMessage(chatId, `✅ Đã cấp code \`${wonCode}\` vào database lúc [${formattedTime}] cho khách \`${targetId}\` thành công!`);
-            })
-            .catch((err) => {
-                bot.sendMessage(chatId, `⚠️ Đã lưu code vào database kèm thời gian nhưng không gửi được tin nhắn cho khách: ${err.message}`);
-            });
-    });
-
-    // ==========================================
-    // XỬ LÝ NÚT BẤM (CALLBACK QUERY)
-    // ==========================================
-    bot.on('callback_query', (query) => {
-        const chatId = query.from.id;
-        
-        const now = Date.now();
-        if (userCooldowns[chatId] && (now - userCooldowns[chatId] < 1500)) {
-            bot.answerCallbackQuery(query.id, { text: '⚠️ Thao tác quá nhanh, từ từ thôi sếp ơi!' });
-            return;
-        }
-        userCooldowns[chatId] = now;
-
-        const user = query.from;
-        const data = query.data;
-
-        let u = users[chatId];
-        if (!u) {
-            u = { 
-                name: user.first_name || 'Khách', 
-                balance: 1501, voucher: 0, wonCodes: [], 
-                linkedAccounts: JSON.parse(JSON.stringify(DEFAULT_LINKED_ACCOUNTS))
-            };
-            saveDatabase();
-        } else {
-            u.name = user.first_name || u.name;
-            Object.keys(DEFAULT_LINKED_ACCOUNTS).forEach(brand => {
-                if (!u.linkedAccounts[brand]) u.linkedAccounts[brand] = [];
-            });
-        }
-        users[chatId] = u;
-        
-        sendLogToWeb(`🖱️ Khách [${u.name}] bấm nút: ${data}`);
-
-        if (data === 'buy_code') {
-            bot.sendMessage(chatId, `
-🖤 *TRUNG TÂM MUA CODE*
-💎 *TRẠNG THÁI ĐƠN HÀNG:*
-- Đơn hàng MINI GAME: Chờ [0] | Hoàn tất [0]
-- Đơn hàng CODE MÀN: Chờ [0] | Hoàn tất [0]
-            `, {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '🎮 V2 LIÊN KẾT (SC88, C168, CM88, F8BET, QQ88, 78WIN)', callback_data: 'v2_links' }],
-                        [{ text: '🕹️ Trang Live Riêng [Hi88, 78Win..]', callback_data: 'live_pages' }],
-                        [{ text: '🔙 Quay lại', callback_data: 'back_start' }]
-                    ]
-                }
-            });
-        }
-        else if (data === 'v2_links') {
-            const cSC88 = u.linkedAccounts.SC88.length;
-            const cC168 = u.linkedAccounts.C168.length;
-            const cCM88 = u.linkedAccounts.CM88.length;
-            const cF8BET = u.linkedAccounts.F8BET.length;
-            const cQQ88 = u.linkedAccounts.QQ88.length;
-            const c78WIN = u.linkedAccounts['78WIN'].length;
-
-            bot.sendMessage(chatId, `
-MINI GAME
-🖤 Chào *${u.name}*
---------------------------------------------------
-📊 *Thống Kê Liên Kết:*
-• Liên Kết tại SC88: [${cSC88}]
-• Liên Kết tại C168: [${cC168}]
-• Liên Kết tại CM88: [${cCM88}]
-• Liên Kết tại F8BET: [${cF8BET}]
-• Liên Kết tại QQ88: [${cQQ88}]
-• Liên Kết tại 78WIN: [${c78WIN}]
---------------------------------------------------
-👉 Chọn trang game bên dưới để quản lý hoặc đặt đơn:
-            `, {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        [
-                            { text: `🎯 SC88 (${cSC88})`, callback_data: 'manage_SC88' },
-                            { text: `🎯 C168 (${cC168})`, callback_data: 'manage_C168' }
-                        ],
-                        [
-                            { text: `🎯 CM88 (${cCM88})`, callback_data: 'manage_CM88' },
-                            { text: `🎯 F8BET (${cF8BET})`, callback_data: 'manage_F8BET' }
-                        ],
-                        [
-                            { text: `🎯 QQ88 (${cQQ88})`, callback_data: 'manage_QQ88' },
-                            { text: `🎯 78WIN (${c78WIN})`, callback_data: 'manage_78WIN' }
-                        ],
-                        [{ text: '📖 HƯỚNG DẪN - CHI TIẾT', callback_data: 'guide_detail' }],
-                        [{ text: '🔙 Quay lại', callback_data: 'buy_code' }]
-                    ]
-                }
-            });
-        }
-        else if (data === 'guide_detail') {
-            bot.sendMessage(chatId, `
-📖 *HƯỚNG DẪN SỬ DỤNG HỆ THỐNG HENDY CYBERTECH*
---------------------------------------------------
-1️⃣ *Liên Kết Tài Khoản SLL:* 
-   - Gửi theo cú pháp: \`Tài khoản | Mật khẩu | Brand\`
-   - (Ví dụ: \`acc123 | 123456 | QQ88\`)
-2️⃣ *Trung Tâm Khách Hàng:* 
-   - Xem tổng quan số dư ví, số lượng tài khoản đã liên kết và lịch sử trúng code trực tuyến qua giao diện web.
---------------------------------------------------
-💡 *Mọi thắc mắc vui lòng liên hệ @hendyngo hỗ trợ để được giải đáp!*
-            `, {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: [[{ text: '🔙 Quay lại', callback_data: 'v2_links' }]] }
-            });
-        }
-        else if (data.startsWith('manage_')) {
-            const brand = data.replace('manage_', '');
-            const accounts = u.linkedAccounts[brand] || [];
-            let keyboard = [];
-            
-            if (accounts.length === 0) {
-                bot.sendMessage(chatId, `📂 *DANH SÁCH TÀI KHOẢN (${brand})*\n--------------------------------------------------\nChưa liên kết tài khoản nào.`, {
-                    parse_mode: 'Markdown',
-                    reply_markup: { inline_keyboard: [[{ text: `➕ THÊM LIÊN KẾT | ACC ${brand}`, callback_data: `link_${brand}` }], [{ text: '🔙 Quay lại', callback_data: 'v2_links' }]] }
-                });
-            } else {
-                let msgText = `📂 *DANH SÁCH TÀI KHOẢN (${brand})*\n--------------------------------------------------\n`;
-                accounts.forEach((acc, index) => {
-                    msgText += `${index + 1}. TK: \`${acc.tk}\` - Code: \`${acc.miniCode}\`\n`;
-                    keyboard.push([{ text: `❌ Xóa ${acc.tk}`, callback_data: `del_${brand}_${index}` }]);
-                });
-                keyboard.push([{ text: `➕ THÊM LIÊN KẾT | ACC ${brand}`, callback_data: `link_${brand}` }]);
-                keyboard.push([{ text: '🔙 Quay lại', callback_data: 'v2_links' }]);
-
-                bot.sendMessage(chatId, msgText, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
-            }
-        }
-        else if (data.startsWith('del_')) {
-            const parts = data.replace('del_', '').split('_');
-            const brand = parts[0];
-            const index = parseInt(parts[1]);
-
-            if (u.linkedAccounts[brand] && u.linkedAccounts[brand][index]) {
-                const removed = u.linkedAccounts[brand].splice(index, 1)[0];
-                saveDatabase();
-                bot.sendMessage(chatId, `🗑️ Đã xóa tài khoản \`${removed.tk}\` khỏi ${brand}!`, { parse_mode: 'Markdown' });
-                sendLogToWeb(`🗑️ Khách [${u.name}] đã xóa tài khoản ${removed.tk} khỏi ${brand}`);
-            }
-            bot.answerCallbackQuery(query.id, { text: 'Đã xóa thành công!' });
-            return;
-        }
-        else if (data.startsWith('link_')) {
-            const brand = data.replace('link_', '');
-            userStates[chatId] = { step: 'WAITING_FOR_CREDENTIALS', brand: brand };
-            bot.sendMessage(chatId, `
-📍 *TRANG: ${brand} MINI GAME*
---------------------------------------------------
-🔒 Vui lòng gửi thông tin theo cú pháp SLL:
-\`Tài khoản | Mật khẩu | Brand\`
-*(Ví dụ: acc123 | 123456 | ${brand})*
-            `, { parse_mode: 'Markdown' });
-        }
-        else if (data === 'deposit') {
-            userStates[chatId] = { step: 'WAITING_FOR_DEPOSIT_AMOUNT' };
-            bot.sendMessage(chatId, '💵 Nhập số tiền sếp muốn nạp vào ví (Tối thiểu 10.000đ):');
-        }
-        else if (data === 'customer_center') {
-            let linkedList = [];
-            Object.keys(u.linkedAccounts || {}).forEach(brand => {
-                u.linkedAccounts[brand].forEach(acc => { linkedList.push(`[${brand}] ${acc.tk} (${acc.miniCode})`); });
-            });
-            let wonList = u.wonCodes || [];
-            const dashboardUrl = `https://ngogiaidy56-eng.github.io/?name=${encodeURIComponent(u.name)}&id=${chatId}&balance=${u.balance}&linked_list=${encodeURIComponent(JSON.stringify(linkedList))}&won_list=${encodeURIComponent(JSON.stringify(wonList))}`;
-
-            bot.sendMessage(chatId, `📇 *TRUNG TÂM QUẢN LÝ TÀI KHOẢN*\n--------------------------------------------------\n✅ *Hệ thống đã chuẩn bị link quản lý riêng cho bạn!*`, {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: [[{ text: '🚀 MỞ TRUNG TÂM KHÁCH HÀNG', url: dashboardUrl }], [{ text: '🔙 Quay lại', callback_data: 'back_start' }]] }
-            });
-        }
-        else if (data === 'back_start') {
-            bot.sendMessage(chatId, '🏠 Nhắn /start để quay lại bảng điều khiển chính.');
-        }
-
-        bot.answerCallbackQuery(query.id);
-    });
-
-    // XỬ LÝ NHẬP LIỆU VĂN BẢN VÀ HỖ TRỢ SLL (CÚ PHÁP MỚI: Tài khoản | Mật khẩu | Brand)
-    bot.on('message', (msg) => {
-        const chatId = msg.chat.id.toString();
-        const text = msg.text;
-        if (!text || text.startsWith('/')) return;
-        
-        let u = users[chatId];
-        if (!u) {
-            u = { 
-                name: msg.from.first_name || 'Khách', 
-                balance: 1501, voucher: 0, wonCodes: [], 
-                linkedAccounts: JSON.parse(JSON.stringify(DEFAULT_LINKED_ACCOUNTS))
-            };
-            saveDatabase();
-        } else {
-            u.name = msg.from.first_name || u.name;
-            Object.keys(DEFAULT_LINKED_ACCOUNTS).forEach(brand => {
-                if (!u.linkedAccounts[brand]) u.linkedAccounts[brand] = [];
-            });
-        }
-        users[chatId] = u;
-
-        sendLogToWeb(`💬 Khách [${u.name}] nhắn: ${text}`);
-
-        if (userStates[chatId]?.step === 'WAITING_FOR_DEPOSIT_AMOUNT') {
-            const amount = parseInt(text.replace(/\D/g, ''));
-            if (amount >= 10000) {
-                const qrUrl = `https://img.vietqr.io/image/MB-0123456789ABC-compact2.png?amount=${amount}&addInfo=HENDY${chatId}`;
-                bot.sendPhoto(chatId, qrUrl, { 
-                    caption: `⚡ *LỆNH NẠP TIỀN TỰ ĐỘNG*\n💵 Số tiền: \`${amount.toLocaleString()} VNĐ\`\n📝 Nội dung chuyển khoản: \`HENDY${chatId}\``,
-                    parse_mode: 'Markdown'
-                });
-                sendLogToWeb(`💵 Khách [${u.name}] tạo lệnh nạp: ${amount.toLocaleString()} VNĐ`);
-                delete userStates[chatId];
-            } else {
-                bot.sendMessage(chatId, '⚠️ Số tiền nạp tối thiểu là 10.000 VNĐ!');
-            }
-            return;
-        }
-
-        // Xử lý nhập SLL / Liên kết tài khoản với cú pháp mới: Tài khoản | Mật khẩu | Brand
-        const lines = text.split('\n');
-        let successList = [];
-        let duplicateCount = 0;
-        let errorCount = 0;
-        let limitExceededCount = 0;
-        const MAX_ACCOUNTS = 4;
-
-        // KIỂM TRA QUYỀN ADMIN: Nếu là Admin thì KHÔNG BỊ GIỚ HẠN (không giới hạn 4 acc)
-        const isAdmin = (chatId === ADMIN_ID);
-
-        let totalCurrentAccounts = Object.values(u.linkedAccounts).reduce((sum, arr) => sum + arr.length, 0);
-
-        for (let i = 0; i < lines.length; i++) {
-            let line = lines[i].trim();
-            if (line === '') continue;
-
-            let parts = line.split('|').map(s => s.trim());
-
-            if (parts.length >= 2) {
-                let tk = parts[0];
-                let mk = parts[1];
-                // Cú pháp mới: Tài khoản | Mật khẩu | Brand
-                let brand = parts.length >= 3 ? parts[2].toUpperCase() : (userStates[chatId]?.brand || 'SC88');
-                let miniCode = tk;
-
-                // Nếu brand nhập vào không tồn tại trong hệ thống, mặc định đẩy về SC88 hoặc lấy theo state
-                if (!DEFAULT_LINKED_ACCOUNTS.hasOwnProperty(brand)) {
-                    brand = userStates[chatId]?.brand || 'SC88';
-                }
-
-                if (!u.linkedAccounts[brand]) {
-                    u.linkedAccounts[brand] = [];
-                }
-
-                // Kiểm tra giới hạn tài khoản (Admin được miễn hoàn toàn)
-                if (!isAdmin && totalCurrentAccounts >= MAX_ACCOUNTS) {
-                    limitExceededCount++;
-                    continue;
-                }
-
-                let isDuplicate = u.linkedAccounts[brand].some(a => a.tk.toLowerCase() === tk.toLowerCase());
-
-                if (isDuplicate) {
-                    duplicateCount++;
-                } else {
-                    u.linkedAccounts[brand].push({ tk, mk, miniCode });
-                    totalCurrentAccounts++;
-                    successList.push(`[${tk}] tại ${brand}`);
-
-                    if (masterWebSocket && masterWebSocket.readyState === WebSocket.OPEN) {
-                        masterWebSocket.send(JSON.stringify({
-                            action: 'SYNC_TELE_ACCOUNT',
-                            value: { tk: tk, mk: mk, tab: miniCode, brand: brand, sender: u.name },
-                            channel: currentChannel
-                        }));
-                    }
-                }
-            } else {
-                errorCount++;
-            }
-        }
-
-        if (successList.length > 0) {
-            saveDatabase();
-        }
-
-        let replyMsg = "";
-        if (successList.length > 0) {
-            let timeNow = new Date().toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-            replyMsg += `🥰 *Ting ting! Chốt đơn ${successList.length} acc lúc ${timeNow}:*\n`;
-            successList.forEach(accInfo => {
-                replyMsg += `👉 ${accInfo}\n`;
-            });
-            replyMsg += `\n`;
-        }
-
-        if (duplicateCount > 0) {
-            replyMsg += `😅 *Quen quen nha!* Bỏ qua **${duplicateCount} acc** đã có sẵn trên hệ thống.\n`;
-        }
-
-        if (limitExceededCount > 0) {
-            replyMsg += `😢 *Giỏ hàng đầy!* Từ chối **${limitExceededCount} acc** (Khách thường tối đa ${MAX_ACCOUNTS} acc).\n`;
-        }
-
-        if (errorCount > 0 && successList.length === 0 && duplicateCount === 0) {
-            replyMsg += `🤪 *Lạc nhịp rồi!* Bỏ qua **${errorCount} dòng** sai cú pháp (Chuẩn: Tài khoản | Mật khẩu | Brand).\n`;
-        }
-
-        if (successList.length === 0) {
-            if (duplicateCount > 0 && limitExceededCount === 0) {
-                replyMsg = `😅 *Toàn hàng cũ!* Các tài khoản này bạn đã liên kết hết từ trước rồi nha.`;
-            } else if (limitExceededCount > 0) {
-                replyMsg = `😢 *Kho đã đầy!* Bạn đã chạm nóc giới hạn ${MAX_ACCOUNTS} tài khoản rồi, không nhét thêm được đâu nè.`;
-            }
-        }
-
-        if (replyMsg !== "") {
-            bot.sendMessage(chatId, replyMsg, { 
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [[
-                        { text: "🌟 Tuyệt!", callback_data: "awesome" }, 
-                        { text: "📜 Lịch sử", callback_data: "customer_center" },
-                        { text: "🚑 Xem mẫu", callback_data: "guide_detail" }
-                    ]]
-                }
-            });
-        }
-
-        if (userStates[chatId]?.step === 'WAITING_FOR_CREDENTIALS') {
-            delete userStates[chatId];
-        }
-    });
-}
-
-// ==========================================
-// 3. KẾT NỐI WEBSOCKET VỚI TRẠM MẸ
-// ==========================================
-function connectToMasterHub() {
-    const wsUrl = 'wss://hendy-server-pro-production.up.railway.app'; 
-    const ws = new WebSocket(wsUrl);
-    
-    ws.on('open', () => { 
-        console.log('⚡ Bot Node.js đã kết nối với WebSocket Trạm Mẹ thành công!'); 
-        masterWebSocket = ws; 
-        
-        ws.send(JSON.stringify({ 
-            action: 'RES_TELEGRAM_STATUS', 
-            status: bot ? 'RUNNING' : 'STOPPED', 
-            channel: currentChannel 
-        }));
-    });
-
-    ws.on('message', (message) => {
         try {
-            const data = JSON.parse(message);
-            if (data.channel && data.channel !== currentChannel && data.action.startsWith('CMD_')) return;
+            const rawLinked = urlParams.get('linked_list');
+            if (rawLinked) linkedList = JSON.parse(decodeURIComponent(rawLinked));
+        } catch (e) { console.error(e); }
 
-            if (data.action === 'CMD_START_TELEGRAM') {
-                if (data.token) currentToken = data.token;
-                if (data.adminId) currentAdminId = data.adminId;
-                if (data.channel) currentChannel = data.channel;
-                
-                let isSuccess = startBot(currentToken);
-                if (isSuccess) sendLogToWeb('✅ Đã bật Bot Telegram từ xa thành công!');
-            }
-            else if (data.action === 'CMD_STOP_TELEGRAM') {
-                if (bot) {
-                    bot.stopPolling();
-                    bot = null;
-                    sendLogToWeb('🛑 Đã TẮT Bot Telegram từ xa!');
-                    ws.send(JSON.stringify({ action: 'RES_TELEGRAM_STATUS', status: 'STOPPED', channel: currentChannel }));
-                }
-            }
-            else if (data.action === 'CMD_TELEGRAM_BROADCAST') {
-                if (bot && currentAdminId) {
-                    bot.sendMessage(currentAdminId, `📢 *THÔNG BÁO TỪ TRUNG TÂM ĐIỀU KHIỂN:*\n\n${data.message}`, { parse_mode: 'Markdown' })
-                       .catch(err => sendLogToWeb(`❌ Lỗi gửi tin phát loa: ${err.message}`));
-                    sendLogToWeb(`📢 Đã gửi loa thành công tới Admin!`);
-                }
-            }
-        } catch (err) {
-            console.error("❌ Lỗi parse dữ liệu WebSocket:", err.message);
+        try {
+            const rawWon = urlParams.get('won_list');
+            if (rawWon) wonList = JSON.parse(decodeURIComponent(rawWon));
+        } catch (e) { console.error(e); }
+
+        document.getElementById('user-name').innerText = '@' + name;
+        document.getElementById('user-id').innerText = id;
+        document.getElementById('user-balance').innerText = balance.toLocaleString('vi-VN') + 'đ';
+        document.getElementById('user-voucher').innerText = voucher.toLocaleString('vi-VN') + 'đ';
+        
+        document.getElementById('count-linked').innerText = linkedList.length;
+        document.getElementById('count-won').innerText = wonList.length;
+
+        // Render Linked Accounts
+        const linkedContainer = document.getElementById('content-linked');
+        if (linkedList.length === 0) {
+            linkedContainer.innerHTML = `<div class="glass-card rounded-2xl p-8 text-center text-gray-500"><i class="fa-solid fa-folder-open text-3xl mb-2"></i><p>Chưa có tài khoản nào được liên kết.</p></div>`;
+        } else {
+            linkedContainer.innerHTML = linkedList.map((item, index) => `
+                <div class="glass-card rounded-2xl p-4 flex items-center justify-between border-gray-800 hover:border-indigo-500/50 transition-all">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold font-mono">${index + 1}</div>
+                        <div>
+                            <span class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 uppercase">${item.brand || 'HENDY'}</span>
+                            <h3 class="text-base font-bold text-white mt-1 font-mono">${item.tk || 'N/A'}</h3>
+                        </div>
+                    </div>
+                    <span class="text-xs font-semibold text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-xl border border-emerald-500/20 flex items-center gap-1.5">
+                        <i class="fa-solid fa-circle-check"></i> Hoạt động
+                    </span>
+                </div>
+            `).join('');
         }
-    });
 
-    ws.on('close', () => { 
-        masterWebSocket = null; 
-        setTimeout(connectToMasterHub, 5000); 
-    });
-    ws.on('error', () => {});
-}
+        // Render Won Codes
+        const wonContainer = document.getElementById('content-won');
+        if (wonList.length === 0) {
+            wonContainer.innerHTML = `<div class="glass-card rounded-2xl p-8 text-center text-gray-500"><i class="fa-solid fa-gift text-3xl mb-2"></i><p>Chưa có lịch sử trúng mã code.</p></div>`;
+        } else {
+            wonContainer.innerHTML = wonList.map((item, index) => `
+                <div class="glass-card rounded-2xl p-4 flex items-center justify-between border-gray-800 hover:border-emerald-500/50 transition-all">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold font-mono">${index + 1}</div>
+                        <div>
+                            <span class="text-xs font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 uppercase">${item.brand || 'SỰ KIỆN'}</span>
+                            <h3 class="text-sm font-bold text-white mt-1 font-mono">TK: ${item.accountTk || 'N/A'}</h3>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-[10px] text-gray-400 uppercase block">Thưởng</span>
+                        <span class="text-base font-black text-amber-400 font-mono">+${item.code || 0} Điểm</span>
+                    </div>
+                </div>
+            `).join('');
+        }
 
-// ==========================================
-// KHỞI CHẠY HỆ THỐNG
-// ==========================================
-loadDatabase(); 
-startBot(currentToken); 
-connectToMasterHub(); 
+        function switchTab(tab) {
+            const btnLinked = document.getElementById('btn-tab-linked');
+            const btnWon = document.getElementById('btn-tab-won');
+            const contentLinked = document.getElementById('content-linked');
+            const contentWon = document.getElementById('content-won');
 
-console.log('🤖 Module Hendy Cybertech Pro (Updated Version) đang chạy...');
+            if (tab === 'linked') {
+                btnLinked.className = "flex-1 py-3 rounded-xl font-bold text-sm transition-all duration-300 tab-active flex items-center justify-center gap-2";
+                btnWon.className = "flex-1 py-3 rounded-xl font-bold text-sm transition-all duration-300 text-gray-400 hover:text-white flex items-center justify-center gap-2";
+                contentLinked.classList.remove('hidden');
+                contentWon.classList.add('hidden');
+            } else {
+                btnWon.className = "flex-1 py-3 rounded-xl font-bold text-sm transition-all duration-300 tab-active flex items-center justify-center gap-2";
+                btnLinked.className = "flex-1 py-3 rounded-xl font-bold text-sm transition-all duration-300 text-gray-400 hover:text-white flex items-center justify-center gap-2";
+                contentWon.classList.remove('hidden');
+                contentLinked.classList.add('hidden');
+            }
+        }
+    </script>
+</body>
+</html>
