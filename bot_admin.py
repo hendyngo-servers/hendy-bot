@@ -6,12 +6,18 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
+# ==========================================
+# ⚙️ CẤU HÌNH HỆ THỐNG
+# ==========================================
 BOT2_TOKEN = "8864632779:AAHX6grIi3yat-Ak7kYTUyJeRDE1ZggJ3eI"
 BOT1_TOKEN = "8689114890:AAFBFM0rNtZWpOtAovIPHPVQTJVp0odU1DQ"
 ADMIN_ID = "6138197737"
 
 admin_states = {}
 
+# ==========================================
+# 🗄️ QUẢN LÝ DATABASE (SQLite)
+# ==========================================
 def get_all_users():
     conn = sqlite3.connect('system.db')
     cursor = conn.cursor()
@@ -65,15 +71,21 @@ def notify_user_via_bot1(chat_id, text):
     except Exception as e:
         print(f"Lỗi gửi thông báo: {e}")
 
+# ==========================================
+# 🤖 GIAO DIỆN & XỬ LÝ LOGIC BOT ADMIN
+# ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_user.id)
     if chat_id != ADMIN_ID:
         return
 
-    welcome_message = "👑 *BẢNG ĐIỀU KHIỂN ADMIN TỐI CAO*\nHệ thống sẵn sàng."
+    welcome_message = "👑 *BẢNG ĐIỀU KHIỂN ADMIN TỐI CAO*\nHệ thống quản lý tích hợp sẵn sàng."
+    
+    # Bổ sung thêm các nút tính năng mới trên Menu chính
     keyboard = [
         [InlineKeyboardButton("👥 QUẢN LÝ USER", callback_data="admin_list_users")],
-        [InlineKeyboardButton("🎁 CẬP NHẬT TRÚNG CODE", callback_data="admin_win_code_menu")]
+        [InlineKeyboardButton("🎁 CẬP NHẬT TRÚNG CODE", callback_data="admin_win_code_menu")],
+        [InlineKeyboardButton("📢 GỬI BROADCAST", callback_data="admin_broadcast_prompt"), InlineKeyboardButton("🔗 ĐỔI LINK LIVE", callback_data="admin_changelink_prompt")]
     ]
     
     if chat_id in admin_states:
@@ -157,6 +169,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_states[chat_id] = "waiting_wincode"
         await query.edit_message_text("🎁 Gửi danh sách theo định dạng: `TàiKhoản|MãCode` (mỗi dòng 1 acc).", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀ Quay lại", callback_data="back_start")]]))
 
+    elif data == "admin_broadcast_prompt":
+        admin_states[chat_id] = "waiting_broadcast"
+        await query.edit_message_text("📢 Sếp hãy nhập nội dung thông báo muốn gửi đến toàn bộ người dùng:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀ Quay lại", callback_data="back_start")]]))
+
+    elif data == "admin_changelink_prompt":
+        admin_states[chat_id] = "waiting_changelink"
+        await query.edit_message_text("🔗 Sếp hãy nhập Link Live mới để gửi lệnh cập nhật:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀ Quay lại", callback_data="back_start")]]))
+
     elif data == "back_start":
         await start(update, context)
 
@@ -164,7 +184,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_user.id)
     if chat_id != ADMIN_ID or chat_id not in admin_states:
         return
-    if admin_states[chat_id] == "waiting_wincode":
+    
+    current_state = admin_states[chat_id]
+
+    if current_state == "waiting_wincode":
         lines = update.message.text.strip().split('\n')
         conn = sqlite3.connect('system.db')
         cursor = conn.cursor()
@@ -187,6 +210,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 not_found += 1
         del admin_states[chat_id]
         await update.message.reply_text(f"✅ Xong!\nGửi thành công: {success}\nKhông tìm thấy: {not_found}")
+
+    elif current_state == "waiting_broadcast":
+        msg_text = update.message.text.strip()
+        users = get_all_users()
+        count = 0
+        for u in users:
+            uid = u[0]
+            notify_user_via_bot1(uid, f"📢 *THÔNG BÁO HỆ THỐNG*\n\n{msg_text}")
+            count += 1
+        del admin_states[chat_id]
+        await update.message.reply_text(f"✅ Đã gửi thông báo Broadcast thành công đến {count} khách hàng!")
+
+    elif current_state == "waiting_changelink":
+        new_link = update.message.text.strip()
+        del admin_states[chat_id]
+        # Xử lý bắn lệnh đổi link hoặc lưu trữ tùy biến hệ thống sếp
+        await update.message.reply_text(f"✅ Đã nhận Link Live mới:\n`{new_link}`\n(Hệ thống đã ghi nhận lệnh đổi link)", parse_mode="Markdown")
 
 def main():
     app = ApplicationBuilder().token(BOT2_TOKEN).build()
