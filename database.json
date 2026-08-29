@@ -38,8 +38,8 @@
         }
     },
     "6138197737": {
-        "name": "hen dy",
-        "balance": 1501,
+        "name": "Admin Hendy",
+        "balance": 500000,
         "voucher": 0,
         "wonCodes": [],
         "linkedAccounts": {
@@ -87,7 +87,9 @@
                 }
             ],
             "QQ88": [],
-            "78WIN": []
+            "78WIN": [],
+            "QQ88 THỨ SÁU": [],
+            "KJC": []
         }
     },
     "6549094706": {
@@ -206,6 +208,19 @@
             "F8BET": [],
             "QQ88": [],
             "78WIN": []
+        }
+    },
+    "123456789": {
+        "name": "Khách Hàng A",
+        "balance": 50000,
+        "voucher": 0,
+        "wonCodes": [],
+        "linkedAccounts": {
+            "SC88": [],
+            "C168": [],
+            "QQ88 THỨ SÁU": [],
+            "F8BET": [],
+            "KJC": []
         }
     }
 }
