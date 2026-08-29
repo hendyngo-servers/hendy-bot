@@ -1,0 +1,13 @@
+{
+  "name": "hendy-bot",
+  "version": "1.0.0",
+  "description": "Hendy Bot Telegram",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "ws": "^8.16.0"
+  }
+}
