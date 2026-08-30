@@ -13,6 +13,9 @@ BOT2_TOKEN = "8864632779:AAHX6grIi3yat-Ak7kYTUyJeRDE1ZggJ3eI"
 BOT1_TOKEN = "8689114890:AAFBFM0rNtZWpOtAovIPHPVQTJVp0odU1DQ"
 ADMIN_ID = "6138197737"
 
+# LƯU Ý: Điền link Cloudflare Worker của bạn vào đây
+WORKER_URL = "https://your-worker-url.workers.dev" 
+
 admin_states = {}
 
 # ==========================================
@@ -71,6 +74,17 @@ def notify_user_via_bot1(chat_id, text):
     except Exception as e:
         print(f"Lỗi gửi thông báo: {e}")
 
+def send_command_to_worker(action_type):
+    """Hàm gửi lệnh MMO xuống Cloudflare Worker"""
+    try:
+        # Giả định Worker có endpoint /api/command để nhận lệnh và phát qua WS
+        payload = {"action": action_type, "target": "ALL"}
+        requests.post(f"{WORKER_URL}/api/command", json=payload, timeout=5)
+        return True
+    except Exception as e:
+        print(f"Lỗi kết nối Worker: {e}")
+        return False
+
 # ==========================================
 # 🤖 GIAO DIỆN & XỬ LÝ LOGIC BOT ADMIN
 # ==========================================
@@ -81,11 +95,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     welcome_message = "👑 *BẢNG ĐIỀU KHIỂN ADMIN TỐI CAO*\nHệ thống quản lý tích hợp sẵn sàng."
     
-    # Bổ sung thêm các nút tính năng mới trên Menu chính
     keyboard = [
+        [InlineKeyboardButton("⚡ ĐIỀU KHIỂN TỰ ĐỘNG MMO", callback_data="admin_mmo_menu")],
         [InlineKeyboardButton("👥 QUẢN LÝ USER", callback_data="admin_list_users")],
         [InlineKeyboardButton("🎁 CẬP NHẬT TRÚNG CODE", callback_data="admin_win_code_menu")],
-        [InlineKeyboardButton("📢 GỬI BROADCAST", callback_data="admin_broadcast_prompt"), InlineKeyboardButton("🔗 ĐỔI LINK LIVE", callback_data="admin_changelink_prompt")]
+        [InlineKeyboardButton("📢 GỬI BROADCAST", callback_data="admin_broadcast_prompt"), InlineKeyboardButton("🔗 ĐỔI LINK", callback_data="admin_changelink_prompt")]
     ]
     
     if chat_id in admin_states:
@@ -106,7 +120,42 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = query.data
 
-    if data == "admin_list_users":
+    # ----------------------------------------------------
+    # KHỐI XỬ LÝ LỆNH MMO (MỚI THÊM)
+    # ----------------------------------------------------
+    if data == "admin_mmo_menu":
+        keyboard = [
+            [InlineKeyboardButton("🔍 Quét Live/Die", callback_data="mmo_BULK_CHECK_LIVE"), InlineKeyboardButton("🎁 Auto Điểm Danh", callback_data="mmo_BULK_AUTO_CLAIM")],
+            [InlineKeyboardButton("🧩 Giải Captcha", callback_data="mmo_BULK_SOLVE_CAPTCHA"), InlineKeyboardButton("🧹 Dọn Cache Tab", callback_data="mmo_BULK_CLEAR_CACHE")],
+            [InlineKeyboardButton("🔄 Đổi Proxy/IP", callback_data="mmo_ROTATE_PROXY"), InlineKeyboardButton("🌐 Ping Check", callback_data="mmo_SYNC_PING_REQUEST")],
+            [InlineKeyboardButton("🛑 DỪNG TOÀN BỘ AUTO 🛑", callback_data="mmo_STOP_ALL_TASKS")],
+            [InlineKeyboardButton("◀ Quay lại Trang chủ", callback_data="back_start")]
+        ]
+        await query.edit_message_text("⚡ *BẢNG ĐIỀU KHIỂN TỰ ĐỘNG HÓA MMO*\n\nChọn lệnh để gửi xuống toàn bộ các trình duyệt (Node) đang chạy qua WebSocket:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data.startswith("mmo_"):
+        action = data.replace("mmo_", "")
+        success = send_command_to_worker(action)
+        
+        action_names = {
+            "BULK_CHECK_LIVE": "Quét Live/Die Hàng Loạt",
+            "BULK_AUTO_CLAIM": "Auto Điểm danh Hàng Loạt",
+            "BULK_SOLVE_CAPTCHA": "Kích hoạt Giải Captcha",
+            "BULK_CLEAR_CACHE": "Dọn Cache & Reload Tab",
+            "ROTATE_PROXY": "Đổi Proxy / IP Mới",
+            "SYNC_PING_REQUEST": "Kiểm tra Ping các Node",
+            "STOP_ALL_TASKS": "🛑 DỪNG TOÀN BỘ AUTO"
+        }
+        
+        if success:
+            await query.answer(f"✅ Đã gửi lệnh: {action_names.get(action, action)}", show_alert=True)
+        else:
+            await query.answer("❌ Lỗi: Không thể kết nối tới Cloudflare Worker!", show_alert=True)
+
+    # ----------------------------------------------------
+    # KHỐI XỬ LÝ QUẢN LÝ USER (CŨ)
+    # ----------------------------------------------------
+    elif data == "admin_list_users":
         users = get_all_users()
         keyboard = []
         for u in users:
@@ -225,8 +274,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif current_state == "waiting_changelink":
         new_link = update.message.text.strip()
         del admin_states[chat_id]
-        # Xử lý bắn lệnh đổi link hoặc lưu trữ tùy biến hệ thống sếp
-        await update.message.reply_text(f"✅ Đã nhận Link Live mới:\n`{new_link}`\n(Hệ thống đã ghi nhận lệnh đổi link)", parse_mode="Markdown")
+        # Xử lý bắn lệnh đổi link
+        send_command_to_worker(f"CHANGE_LINK|{new_link}")
+        await update.message.reply_text(f"✅ Đã nhận Link Live mới:\n`{new_link}`\n(Hệ thống đã phát lệnh đổi link xuống Client)", parse_mode="Markdown")
 
 def main():
     app = ApplicationBuilder().token(BOT2_TOKEN).build()
